@@ -137,3 +137,4 @@ CODEX_APPROVAL_EXTRA_EVENTS="some_new_event"
 - watcher 只处理启动之后新增的日志内容，不回放旧交互
 - `FEISHU_KEYWORD` 是飞书机器人的安全校验，不是本地筛选条件
 - 这个方案监听的是全局 `codex-tui.log`，不是按 shell 单独隔离
+- 对命令执行授权，只有真正可能弹出人工确认的命令才会提前提醒；已经被 Codex 规则放行的命令不会重复打扰

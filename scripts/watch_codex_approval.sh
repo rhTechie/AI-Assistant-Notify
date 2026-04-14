@@ -36,6 +36,7 @@ load_repo_env_if_present "$ENV_FILE"
 STATE_DIR="${TMPDIR:-/tmp}/codex-feishu-notify"
 PID_FILE="$STATE_DIR/watch.pid"
 LOCK_FILE="$STATE_DIR/watch.lock"
+RULES_FILE="${CODEX_RULES_FILE:-$HOME/.codex/rules/default.rules}"
 RUNTIME_LOG="$STATE_DIR/watch-runtime.log"
 ERROR_LOG_FILE="${CODEX_APPROVAL_WATCH_ERROR_LOG:-$STATE_DIR/watch-errors.log}"
 DEBUG_LOG_FILE="${CODEX_APPROVAL_WATCH_DEBUG_LOG:-$STATE_DIR/watch-debug.log}"
@@ -133,8 +134,38 @@ extract_tool_justification() {
     printf '%s' "$justification"
 }
 
+extract_tool_prefix_rule() {
+    local line="$1"
+    local prefix_rule
+
+    prefix_rule=$(printf '%s\n' "$line" | sed -n 's/.*"prefix_rule":\[\([^]]*\)\].*/\1/p')
+    printf '%s' "$prefix_rule"
+}
+
+prefix_rule_is_approved() {
+    local prefix_rule_raw="$1"
+    local prefix_rule_formatted=""
+
+    if [ -z "$prefix_rule_raw" ] || [ ! -f "$RULES_FILE" ]; then
+        return 1
+    fi
+
+    prefix_rule_formatted=$(printf '%s\n' "$prefix_rule_raw" | sed 's/","/", "/g')
+    grep -Fq "prefix_rule(pattern=[${prefix_rule_formatted}], decision=\"allow\")" "$RULES_FILE"
+}
+
 toolcall_requires_early_notification() {
     local line="$1"
+    local prefix_rule_raw=""
+
+    if printf '%s\n' "$line" | grep -q 'ToolCall: exec_command ' && \
+        printf '%s\n' "$line" | grep -q '"sandbox_permissions":"require_escalated"'; then
+        prefix_rule_raw=$(extract_tool_prefix_rule "$line")
+        if ! prefix_rule_is_approved "$prefix_rule_raw"; then
+            printf 'exec_approval'
+            return 0
+        fi
+    fi
 
     if printf '%s\n' "$line" | grep -q 'ToolCall: apply_patch '; then
         printf 'patch_approval'
