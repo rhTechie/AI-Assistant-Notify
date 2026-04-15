@@ -1,12 +1,8 @@
 # Codex Feishu Notify
 
-这个仓库用于在 Codex 出现需要你回来处理的交互时，通过飞书机器人发提醒。
+这个仓库用于在 Codex 异步工作结束或被中断时，通过飞书机器人提醒你回来查看。
 
-典型场景包括：
-
-- 需要你授权执行命令
-- 需要你确认文件修改
-- 需要你手动选择某个选项
+适合配合 Codex 的 `--yolo` 使用：不处理审批流程，只关注当前这一问是否已经结束。
 
 ## 使用方式
 
@@ -21,94 +17,66 @@ cp .env.example .env
 - 把 `FEISHU_WEBHOOK` 改成你的飞书机器人 webhook
 - 把 `FEISHU_KEYWORD` 改成飞书机器人安全设置里实际配置的关键词
 
-3. 先测试飞书链路：
+3. 测试飞书链路：
 
 ```bash
-./scripts/watch_codex_approval.sh test-notify
+./scripts/watch_codex_notify.sh test-notify
 ```
 
 4. 启动 watcher：
 
 ```bash
-./scripts/watch_codex_approval.sh start
+./scripts/watch_codex_notify.sh start
 ```
 
 5. 查看状态：
 
 ```bash
-./scripts/watch_codex_approval.sh status
+./scripts/watch_codex_notify.sh status
 ```
 
 6. 停止 watcher：
 
 ```bash
-./scripts/watch_codex_approval.sh stop
+./scripts/watch_codex_notify.sh stop
 ```
 
-## 配置生效方式
+## 通知规则
 
-当前实现不会实时热加载 `.env`。
+- 正常完成的 `user_input` 轮次会发送结束通知
+- 被 `interrupt` 打断的轮次会发送中断通知
+- 被打断的轮次不会再重复发送完成通知
+- watcher 只处理启动之后新增的日志内容，不回放旧交互
 
-- 修改 `.env` 后，需要重启 watcher 才会生效
-- `test-notify` 这类单次命令会读取执行当下的 `.env`
+## 配置
 
-重启方式：
-
-```bash
-./scripts/watch_codex_approval.sh stop
-./scripts/watch_codex_approval.sh start
-```
-
-## 命令说明
-
-- `./scripts/watch_codex_approval.sh start`
-  后台运行，适合日常使用
-- `./scripts/watch_codex_approval.sh run`
-  前台运行，适合调试
-- `./scripts/watch_codex_approval.sh status`
-  查看 watcher 状态
-- `./scripts/watch_codex_approval.sh stop`
-  停止 watcher
-- `./scripts/watch_codex_approval.sh test-notify`
-  测试飞书发送是否正常
-
-## 环境变量
-
-常用配置只需要关注这些：
+`.env` 只需要配置飞书机器人：
 
 - `FEISHU_WEBHOOK`
   飞书机器人 webhook，必填
 - `FEISHU_KEYWORD`
   飞书机器人安全关键词，必须和机器人后台配置完全一致
-- `CODEX_TUI_LOG_PATH`
-  Codex 日志路径，默认是 `~/.codex/log/codex-tui.log`
-- `CODEX_APPROVAL_WATCH_DEBUG`
-  设为 `1` 时写 debug 日志
 
-详细注释见 [.env.example](/workspace/git/codex-feishu-notify/.env.example)。
+脚本默认监听 `~/.codex/log/codex-tui.log`。
 
-`CODEX_APPROVAL_NOTIFY_COOLDOWN` 和 `CODEX_APPROVAL_CONTEXT_WINDOW` 属于高级参数，通常不需要改。
+## 飞书机器人配置
 
-## 漏报时怎么处理
+这个工具使用飞书群聊的自定义机器人 webhook，只负责往群里推送文本消息。
 
-如果某一种新的 Codex 交互没有发出飞书提醒，最简单的处理方式是：
+1. 在飞书里创建或打开一个用于接收 Codex 通知的群聊。
+2. 打开群聊设置，进入群机器人管理。
+3. 选择添加机器人，然后选择自定义机器人。
+4. 填写机器人名称，例如 `Codex提醒`。
+5. 在安全设置里建议选择自定义关键词，关键词填写成 `.env` 里的 `FEISHU_KEYWORD`，例如 `Codex提醒`。
+6. 创建完成后复制 webhook 地址，填入 `.env` 的 `FEISHU_WEBHOOK`。
+7. 回到本仓库执行 `./scripts/watch_codex_notify.sh test-notify`，确认群里能收到测试消息。
 
-1. 先从 `~/.codex/log/codex-tui.log` 找出对应的新事件名
-2. 把事件名追加到 `.env` 里的 `CODEX_APPROVAL_EXTRA_EVENTS`
-3. 重启 watcher
+注意：
 
-例如：
+- 如果开启了关键词安全设置，发送内容里必须包含该关键词，否则飞书会拒收消息。
+- 当前脚本只支持关键词校验，不支持飞书的签名校验。
+- webhook 地址等同于推送凭证，不要提交到 git。
 
-```bash
-CODEX_APPROVAL_EXTRA_EVENTS="some_new_event"
-```
-
-然后执行：
-
-```bash
-./scripts/watch_codex_approval.sh stop
-./scripts/watch_codex_approval.sh start
-```
 
 ## 排障
 
@@ -117,24 +85,30 @@ CODEX_APPROVAL_EXTRA_EVENTS="some_new_event"
 1. 先看 watcher 是否在运行：
 
 ```bash
-./scripts/watch_codex_approval.sh status
+./scripts/watch_codex_notify.sh status
 ```
 
 2. 再看飞书链路是否正常：
 
 ```bash
-./scripts/watch_codex_approval.sh test-notify
+./scripts/watch_codex_notify.sh test-notify
 ```
 
 3. 如果还不通，再看日志：
 
 - `/tmp/codex-feishu-notify/watch-runtime.log`
 - `/tmp/codex-feishu-notify/watch-errors.log`
-- `/tmp/codex-feishu-notify/watch-debug.log`
 
-## 说明
+日志用途：
 
-- watcher 只处理启动之后新增的日志内容，不回放旧交互
-- `FEISHU_KEYWORD` 是飞书机器人的安全校验，不是本地筛选条件
-- 这个方案监听的是全局 `codex-tui.log`，不是按 shell 单独隔离
-- 对命令执行授权，只有真正可能弹出人工确认的命令才会提前提醒；已经被 Codex 规则放行的命令不会重复打扰
+- `watch-runtime.log` 记录 watcher 自己的运行状态，比如启动时间、监听的 Codex 日志路径、通知是否已经发送。
+- `watch-errors.log` 记录通知发送失败的原因，比如 webhook 配错、关键词不匹配、网络请求失败、飞书接口返回错误。
+
+## 依赖
+
+- `bash`：运行脚本，当前 watcher 使用了 bash 语法。
+- `curl`：调用飞书 webhook 发送通知。
+- `flock`：加锁，避免重复启动多个 watcher。
+- `tail`：持续监听 Codex 的 `codex-tui.log` 新增内容。
+- `sed`：从 Codex 日志行里提取 thread、turn、cwd 等字段。
+- `grep`：判断日志行是否是 turn 开始、完成、中断或工具调用。
