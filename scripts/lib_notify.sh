@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -euo pipefail
 
@@ -126,7 +126,7 @@ EOF
     REPO_ROOT=$(repo_root_from_script_path "${BASH_SOURCE[0]}")
     ENV_FILE="$REPO_ROOT/.env"
 
-    load_repo_env_if_present "$ENV_FILE"
+    load_app_env_if_present "$ENV_FILE"
 
     WATCHER_TYPE="$1"
     shift

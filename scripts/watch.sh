@@ -1,15 +1,16 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -euo pipefail
 
 usage() {
     cat <<'EOF'
 Usage:
-  watch.sh run [watcher_type]
-  watch.sh start [watcher_type]
-  watch.sh stop [watcher_type]
-  watch.sh status [watcher_type]
-  watch.sh test-notify
+  ai-assistant-notify init [--local|--global] [--force]
+  ai-assistant-notify run [watcher_type]
+  ai-assistant-notify start [watcher_type]
+  ai-assistant-notify stop [watcher_type]
+  ai-assistant-notify status [watcher_type]
+  ai-assistant-notify test-notify
 
 Arguments:
   watcher_type    Optional. Specify which watcher to control: codex, claude, or all (default: all)
@@ -22,6 +23,7 @@ Environment:
   CODEX_FEISHU_KEYWORD            Optional. Keyword for Codex. Default: Codex提醒
   CLAUDE_FEISHU_WEBHOOK           Feishu webhook URL for Claude notifications.
   CLAUDE_FEISHU_KEYWORD           Optional. Keyword for Claude. Default: Claude提醒
+  AI_ASSISTANT_NOTIFY_ENV         Optional. Explicit .env file path.
 
 Note:
   - 如果未配置某个 webhook，对应的监测器将不会启动
@@ -35,8 +37,6 @@ source "$SCRIPT_DIR/lib_env.sh"
 REPO_ROOT=$(repo_root_from_script_path "${BASH_SOURCE[0]}")
 ENV_FILE="$REPO_ROOT/.env"
 
-load_repo_env_if_present "$ENV_FILE"
-
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib_notify.sh"
 # shellcheck disable=SC1091
@@ -49,6 +49,10 @@ RUNTIME_LOG="$STATE_DIR/watch-runtime.log"
 ERROR_LOG_FILE="$STATE_DIR/watch-errors.log"
 
 mkdir -p "$STATE_DIR"
+
+load_config() {
+    load_app_env_if_present "$ENV_FILE"
+}
 
 is_watcher_configured() {
     local watcher="$1"
@@ -304,6 +308,11 @@ status_command() {
 
     echo "Runtime log: $RUNTIME_LOG"
     echo "Error log: $ERROR_LOG_FILE"
+    if [ -n "${AI_ASSISTANT_NOTIFY_ENV_FILE:-}" ]; then
+        echo "Config files: $AI_ASSISTANT_NOTIFY_ENV_FILE"
+    else
+        echo "Config files: not loaded"
+    fi
     echo ""
 
     if [ "$watcher_type" = "all" ]; then
@@ -362,23 +371,93 @@ test_notify() {
     fi
 }
 
+init_command() {
+    local target_scope="local"
+    local force=0
+    local arg
+    local template_file="$REPO_ROOT/.env.example"
+    local target_file
+
+    for arg in "$@"; do
+        case "$arg" in
+            --local)
+                target_scope="local"
+                ;;
+            --global)
+                target_scope="global"
+                ;;
+            --force)
+                force=1
+                ;;
+            -h|--help)
+                usage
+                return 0
+                ;;
+            *)
+                echo "Error: unknown init option: $arg" >&2
+                usage
+                return 1
+                ;;
+        esac
+    done
+
+    if [ ! -f "$template_file" ]; then
+        echo "Error: config template not found: $template_file" >&2
+        return 1
+    fi
+
+    case "$target_scope" in
+        local)
+            target_file="${PWD:-$(pwd)}/.env"
+            ;;
+        global)
+            target_file=$(default_user_env_file)
+            if [ -z "$target_file" ]; then
+                echo "Error: HOME or XDG_CONFIG_HOME is required for --global config." >&2
+                return 1
+            fi
+            ;;
+    esac
+
+    if [ -f "$target_file" ] && [ "$force" -ne 1 ]; then
+        echo "Config already exists: $target_file"
+        echo "Use --force to overwrite it."
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$target_file")"
+    cp "$template_file" "$target_file"
+    chmod 600 "$target_file" 2>/dev/null || true
+
+    echo "Created config file: $target_file"
+    echo "Edit it and fill in your Feishu webhook."
+}
+
 COMMAND="${1:-}"
 WATCHER_TYPE="${2:-all}"
 
 case "$COMMAND" in
+    init)
+        shift
+        init_command "$@"
+        ;;
     run)
+        load_config
         run_command "$WATCHER_TYPE"
         ;;
     start)
+        load_config
         start_command "$WATCHER_TYPE"
         ;;
     stop)
         stop_command "$WATCHER_TYPE"
         ;;
     status)
+        load_config
         status_command "$WATCHER_TYPE"
         ;;
     test-notify)
+        load_config
         test_notify
         ;;
     *)

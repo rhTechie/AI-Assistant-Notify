@@ -1,0 +1,28 @@
+{
+  "name": "ai-assistant-notify",
+  "version": "0.1.0",
+  "description": "Monitor AI assistant status and send Feishu notifications.",
+  "license": "UNLICENSED",
+  "bin": {
+    "ai-assistant-notify": "bin/ai-assistant-notify",
+    "aanotify": "bin/ai-assistant-notify"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    ".env.example",
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "bash ./bin/ai-assistant-notify",
+    "test": "bash -n bin/ai-assistant-notify scripts/*.sh scripts/watchers/*.sh scripts/utils/*.sh",
+    "pack:dry-run": "npm pack --dry-run"
+  },
+  "keywords": [
+    "codex",
+    "claude",
+    "feishu",
+    "notification",
+    "cli"
+  ]
+}

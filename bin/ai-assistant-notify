@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR=$(cd -P "$(dirname "$SOURCE")" && pwd)
+    TARGET=$(readlink "$SOURCE")
+    case "$TARGET" in
+        /*)
+            SOURCE="$TARGET"
+            ;;
+        *)
+            SOURCE="$DIR/$TARGET"
+            ;;
+    esac
+done
+
+BIN_DIR=$(cd -P "$(dirname "$SOURCE")" && pwd)
+PACKAGE_ROOT=$(cd "$BIN_DIR/.." && pwd)
+
+exec bash "$PACKAGE_ROOT/scripts/watch.sh" "$@"
