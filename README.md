@@ -23,12 +23,6 @@
 npm install -g ai-assistant-notify
 ```
 
-如果你只是临时在当前源码目录安装测试：
-
-```bash
-npm install -g .
-```
-
 安装后可用命令：
 
 ```bash

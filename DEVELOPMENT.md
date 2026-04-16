@@ -38,18 +38,26 @@ AI_ASSISTANT_NOTIFY_ENV="$PWD/.env"
 
 ## npm 安装行为
 
+### 本地开发（推荐）
+
+使用 `npm link` 将全局包链接到当前仓库，修改代码后立即生效：
+
 ```bash
-npm install -g .
+npm link
 ```
 
-这条命令在本地开发时通常会把全局包链接到当前仓库，不是完整复制安装。优点是你修改仓库代码后，全局命令会立即生效。
+之后执行 `ai-assistant-notify` 命令时，会直接使用当前仓库的代码。修改代码后无需重新安装。
 
-如果要验证“真正发布后用户安装的形态”，用 tarball：
+### 测试打包安装
+
+如果要验证”真正发布后用户安装的形态”，使用 tarball 方式：
 
 ```bash
 npm pack
 npm install -g ./ai-assistant-notify-0.1.0.tgz
 ```
+
+注意：`npm install -g .` 会复制文件到 npm 全局目录，不是链接。每次修改代码后需要重新运行才能生效。
 
 ## 常用开发命令
 
