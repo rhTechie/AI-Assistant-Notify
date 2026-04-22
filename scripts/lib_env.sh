@@ -86,17 +86,17 @@ load_app_env_if_present() {
 load_candidate_env_file() {
     local env_file="$1"
 
-    [ -n "$env_file" ] || return
-    [ -f "$env_file" ] || return
+    [ -n "$env_file" ] || return 0
+    [ -f "$env_file" ] || return 0
 
     case ",$AI_ASSISTANT_NOTIFY_ENV_FILE," in
         *",$env_file,"*)
-            return
+            return 0
             ;;
     esac
 
     if ! env_file_has_app_keys "$env_file"; then
-        return
+        return 0
     fi
 
     load_env_file "$env_file"

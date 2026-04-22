@@ -175,11 +175,12 @@ get_session_log_file() {
         return 1
     fi
 
-    # 将 cwd 转换为项目目录名（替换 / 为 -）
+    # 将 cwd 转换为项目目录名（替换 / 和 _ 为 -）
+    # Claude Code 会将路径中的 / 和 _ 都转换为 -
     local project_dir
-    project_dir=$(echo "$cwd" | sed 's|^/||; s|/|-|g')
+    project_dir=$(echo "$cwd" | sed 's|[/_]|-|g')
 
-    local log_file="$CLAUDE_PROJECTS_DIR/-${project_dir}/${session_id}.jsonl"
+    local log_file="$CLAUDE_PROJECTS_DIR/${project_dir}/${session_id}.jsonl"
 
     if [ -f "$log_file" ]; then
         echo "$log_file"
@@ -240,20 +241,20 @@ check_session_log_for_completion() {
 
     session_log_line_count["$session_id"]="$current_line_count"
 
-    # 如果有 end_turn，立即返回成功
+    # 如果有 end_turn，重置通知标记并立即返回成功
     if [ "$has_end_turn" -eq 1 ]; then
+        unset "session_notified[$session_id]"
         return 0
     fi
 
-    # 如果有 assistant 消息（tool_use），记录时间用于延迟通知
+    # 如果有 assistant 消息（tool_use），更新时间戳
+    # 但不重置通知标记，避免重复通知
     if [ "$has_assistant" -eq 1 ]; then
         if [ -n "$last_assistant_timestamp" ]; then
             local unix_time
             unix_time=$(date -d "$last_assistant_timestamp" +%s 2>/dev/null || date +%s)
             session_last_assistant_time["$session_id"]="$unix_time"
         fi
-        # 重置通知标记
-        unset "session_notified[$session_id]"
     fi
 
     return 1
@@ -307,6 +308,8 @@ claude_watcher_run() {
                     message=$(build_claude_message "turn_complete" "$session_id" "${session_cwd[$session_id]:-}" "${session_last_display[$session_id]:-}")
                     "$notify_callback" "claude" "turn_complete" "$message" "$session_id" "$pid"
 
+                    # 重置通知标记，避免后续再次通知
+                    session_notified["$session_id"]="1"
                     append_log "$runtime_log" "claude turn complete (end_turn) session=$session_id pid=$pid"
                 else
                     # 检查是否应该发送延迟通知（tool_use 情况）
