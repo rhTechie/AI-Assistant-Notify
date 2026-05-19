@@ -13,11 +13,38 @@ source "$WATCHER_SCRIPT_DIR/../utils/process_utils.sh"
 CODEX_LOG_FILE="${CODEX_LOG_FILE:-$HOME/.codex/log/codex-tui.log}"
 
 extract_thread_id() {
-    extract_with_sed "$1" 's/.*thread_id=\([^}: ]*\).*/\1/p'
+    local thread_id
+
+    thread_id=$(extract_with_sed "$1" 's/.*thread_id=\([^}: ]*\).*/\1/p')
+    if [ -n "$thread_id" ]; then
+        printf '%s' "$thread_id"
+        return
+    fi
+
+    extract_with_sed "$1" 's/.*thread\.id=\([^} ]*\).*/\1/p'
 }
 
 extract_turn_id() {
     extract_with_sed "$1" 's/.*turn\.id=\([^} ]*\).*/\1/p'
+}
+
+is_valid_map_key() {
+    local key="${1:-}"
+
+    [ -n "$key" ] && [[ "$key" != *"]"* ]]
+}
+
+is_user_turn_line() {
+    local line="$1"
+
+    printf '%s\n' "$line" | grep -Eq 'codex\.op="user_input[^"]*"'
+}
+
+is_interrupt_line() {
+    local line="$1"
+
+    printf '%s\n' "$line" | grep -q 'codex.op="interrupt"' && \
+        printf '%s\n' "$line" | grep -q 'interrupt received: abort current task, if any'
 }
 
 summarize_tool_call() {
@@ -112,11 +139,11 @@ codex_watcher_run() {
     while IFS= read -r line; do
         local thread_id turn_id active_turn turn_context turn_cwd
 
-        if printf '%s\n' "$line" | grep -q 'codex.op="user_input"' && printf '%s\n' "$line" | grep -q 'codex_core::tasks: new'; then
+        if is_user_turn_line "$line" && printf '%s\n' "$line" | grep -q 'codex_core::tasks: new'; then
             thread_id=$(extract_thread_id "$line")
             turn_id=$(extract_turn_id "$line")
 
-            if [ -n "$thread_id" ] && [ -n "$turn_id" ]; then
+            if is_valid_map_key "$thread_id" && [ -n "$turn_id" ]; then
                 active_turn_by_thread["$thread_id"]="$turn_id"
                 turn_interrupted_by_thread["$thread_id"]=0
                 unset "turn_context_by_thread[$thread_id]"
@@ -131,7 +158,7 @@ codex_watcher_run() {
                 last_tool_cwd="$tool_cwd"
             fi
 
-            if [ -n "$last_tool_thread" ] && [ -n "${active_turn_by_thread[$last_tool_thread]:-}" ]; then
+            if is_valid_map_key "$last_tool_thread" && [ -n "${active_turn_by_thread[$last_tool_thread]:-}" ]; then
                 turn_context_by_thread["$last_tool_thread"]=$(summarize_tool_call "$line")
                 if [ -n "$last_tool_cwd" ]; then
                     turn_cwd_by_thread["$last_tool_thread"]="$last_tool_cwd"
@@ -139,11 +166,15 @@ codex_watcher_run() {
             fi
         fi
 
-        if printf '%s\n' "$line" | grep -q 'codex.op="interrupt"' && printf '%s\n' "$line" | grep -q 'codex_core::codex: new'; then
+        if is_interrupt_line "$line"; then
             thread_id=$(extract_thread_id "$line")
+            if ! is_valid_map_key "$thread_id"; then
+                continue
+            fi
+
             active_turn="${active_turn_by_thread[$thread_id]:-}"
 
-            if [ -n "$thread_id" ] && [ -n "$active_turn" ]; then
+            if [ -n "$active_turn" ]; then
                 turn_interrupted_by_thread["$thread_id"]=1
                 local message
                 message=$(build_turn_message "turn_interrupted" "${turn_cwd_by_thread[$thread_id]:-}" "${turn_context_by_thread[$thread_id]:-}")
@@ -151,7 +182,7 @@ codex_watcher_run() {
             fi
         fi
 
-        if ! printf '%s\n' "$line" | grep -q 'codex.op="user_input"'; then
+        if ! is_user_turn_line "$line"; then
             continue
         fi
 
@@ -162,7 +193,7 @@ codex_watcher_run() {
         thread_id=$(extract_thread_id "$line")
         turn_id=$(extract_turn_id "$line")
 
-        if [ -z "$thread_id" ] || [ -z "$turn_id" ]; then
+        if ! is_valid_map_key "$thread_id" || [ -z "$turn_id" ]; then
             continue
         fi
 

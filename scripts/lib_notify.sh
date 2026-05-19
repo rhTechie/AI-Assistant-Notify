@@ -24,21 +24,17 @@ send_feishu_notification() {
 
     case "$watcher_type" in
         codex)
-            webhook="${CODEX_FEISHU_WEBHOOK:-${FEISHU_WEBHOOK:-}}"
-            keyword="${CODEX_FEISHU_KEYWORD:-${FEISHU_KEYWORD:-Codex提醒}}"
-            ;;
-        claude)
-            webhook="${CLAUDE_FEISHU_WEBHOOK:-${FEISHU_WEBHOOK:-}}"
-            keyword="${CLAUDE_FEISHU_KEYWORD:-${FEISHU_KEYWORD:-Claude提醒}}"
+            webhook="${CODEX_FEISHU_WEBHOOK:-}"
+            keyword="${CODEX_FEISHU_KEYWORD:-Codex提醒}"
             ;;
         *)
-            webhook="${FEISHU_WEBHOOK:-}"
-            keyword="${FEISHU_KEYWORD:-AI助手提醒}"
-            ;;
+            echo "Error: unsupported watcher type: $watcher_type" >&2
+            return 1
+        ;;
     esac
 
     if [ -z "$webhook" ]; then
-        echo "Error: FEISHU_WEBHOOK is required for $watcher_type." >&2
+        echo "Error: CODEX_FEISHU_WEBHOOK is required." >&2
         return 1
     fi
 
@@ -98,16 +94,12 @@ Usage:
   lib_notify.sh <watcher_type> <message>
 
 Arguments:
-  watcher_type    codex or claude
+  watcher_type    codex
   message         Notification message
 
 Environment:
   CODEX_FEISHU_WEBHOOK    Feishu webhook for Codex notifications
   CODEX_FEISHU_KEYWORD    Keyword for Codex notifications (default: Codex提醒)
-  CLAUDE_FEISHU_WEBHOOK   Feishu webhook for Claude notifications
-  CLAUDE_FEISHU_KEYWORD   Keyword for Claude notifications (default: Claude提醒)
-  FEISHU_WEBHOOK          Fallback webhook if specific one not set
-  FEISHU_KEYWORD          Fallback keyword if specific one not set
 
 Example:
   CODEX_FEISHU_WEBHOOK="https://open.feishu.cn/open-apis/bot/v2/hook/xxxx" \
@@ -126,7 +118,7 @@ EOF
     REPO_ROOT=$(repo_root_from_script_path "${BASH_SOURCE[0]}")
     ENV_FILE="$REPO_ROOT/.env"
 
-    load_app_env_if_present "$ENV_FILE"
+    load_repo_env "$ENV_FILE"
 
     WATCHER_TYPE="$1"
     shift

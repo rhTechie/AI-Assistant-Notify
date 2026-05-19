@@ -5,29 +5,22 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  ai-assistant-notify init [--local|--global] [--force]
-  ai-assistant-notify run [watcher_type]
-  ai-assistant-notify start [watcher_type]
-  ai-assistant-notify stop [watcher_type]
-  ai-assistant-notify status [watcher_type]
-  ai-assistant-notify test-notify
+  ./bin/ai-assistant-notify run [codex]
+  ./bin/ai-assistant-notify start [codex]
+  ./bin/ai-assistant-notify stop [codex]
+  ./bin/ai-assistant-notify status [codex]
+  ./bin/ai-assistant-notify test-notify
 
 Arguments:
-  watcher_type    Optional. Specify which watcher to control: codex, claude, or all (default: all)
-                  - all: 启动所有已配置 webhook 的监测器
-                  - codex: 只启动 Codex 监测器
-                  - claude: 只启动 Claude 监测器
+  watcher_type    Optional. Only `codex` is supported. Default: codex
 
 Environment:
   CODEX_FEISHU_WEBHOOK            Feishu webhook URL for Codex notifications.
   CODEX_FEISHU_KEYWORD            Optional. Keyword for Codex. Default: Codex提醒
-  CLAUDE_FEISHU_WEBHOOK           Feishu webhook URL for Claude notifications.
-  CLAUDE_FEISHU_KEYWORD           Optional. Keyword for Claude. Default: Claude提醒
-  AI_ASSISTANT_NOTIFY_ENV         Optional. Explicit .env file path.
 
 Note:
-  - 如果未配置某个 webhook，对应的监测器将不会启动
-  - 可以多次调用 start 命令启动不同的监测器
+  - 配置文件固定为仓库根目录 .env
+  - 当前仅支持 Codex 监测
 EOF
 }
 
@@ -51,44 +44,29 @@ ERROR_LOG_FILE="$STATE_DIR/watch-errors.log"
 mkdir -p "$STATE_DIR"
 
 load_config() {
-    load_app_env_if_present "$ENV_FILE"
+    load_repo_env "$ENV_FILE"
 }
 
 is_watcher_configured() {
     local watcher="$1"
-    local webhook_var=""
 
     case "$watcher" in
         codex)
-            webhook_var="${CODEX_FEISHU_WEBHOOK:-}"
-            ;;
-        claude)
-            webhook_var="${CLAUDE_FEISHU_WEBHOOK:-}"
+            [ -n "${CODEX_FEISHU_WEBHOOK:-}" ] && [ "${CODEX_FEISHU_WEBHOOK:-}" != "https://open.feishu.cn/open-apis/bot/v2/hook/replace-with-your-codex-webhook" ]
             ;;
         *)
             return 1
             ;;
     esac
-
-    [ -n "$webhook_var" ] && [ "$webhook_var" != "https://open.feishu.cn/open-apis/bot/v2/hook/replace-with-your-codex-webhook" ] && [ "$webhook_var" != "https://open.feishu.cn/open-apis/bot/v2/hook/replace-with-your-claude-webhook" ]
 }
 
 get_configured_watchers() {
-    local watchers=""
-
     if is_watcher_configured "codex"; then
-        watchers="codex"
+        echo "codex"
+        return
     fi
 
-    if is_watcher_configured "claude"; then
-        if [ -n "$watchers" ]; then
-            watchers="$watchers,claude"
-        else
-            watchers="claude"
-        fi
-    fi
-
-    echo "$watchers"
+    echo ""
 }
 
 notify_callback() {
@@ -148,8 +126,7 @@ start_watcher_process() {
     # 导出必要的环境变量和函数
     export STATE_DIR RUNTIME_LOG ERROR_LOG_FILE
     export CODEX_FEISHU_WEBHOOK CODEX_FEISHU_KEYWORD
-    export CLAUDE_FEISHU_WEBHOOK CLAUDE_FEISHU_KEYWORD
-    export CODEX_LOG_FILE CLAUDE_SESSION_DIR CLAUDE_HISTORY_FILE CLAUDE_CHECK_INTERVAL
+    export CODEX_LOG_FILE
     export -f notify_callback send_feishu_notification json_escape append_log
 
     if command -v setsid >/dev/null 2>&1; then
@@ -240,71 +217,55 @@ status_watcher_process() {
     fi
 }
 
+normalize_watcher_type() {
+    local watcher_type="${1:-codex}"
+
+    case "$watcher_type" in
+        ""|all|codex)
+            printf 'codex\n'
+            ;;
+        *)
+            echo "Error: unsupported watcher type: $watcher_type" >&2
+            return 1
+            ;;
+    esac
+}
+
 run_command() {
-    local watcher_type="${1:-all}"
+    local watcher_type
+    watcher_type=$(normalize_watcher_type "${1:-codex}")
 
-    if [ "$watcher_type" = "all" ]; then
-        local configured_watchers
-        configured_watchers=$(get_configured_watchers)
-
-        if [ -z "$configured_watchers" ]; then
-            echo "Error: No watchers configured. Please set CODEX_FEISHU_WEBHOOK or CLAUDE_FEISHU_WEBHOOK in .env" >&2
-            exit 1
-        fi
-
-        IFS=',' read -ra watchers <<< "$configured_watchers"
-        for watcher in "${watchers[@]}"; do
-            watcher=$(echo "$watcher" | xargs)
-            if [ -n "$watcher" ]; then
-                start_watcher_process "$watcher" || true
-            fi
-        done
-    else
-        start_watcher_process "$watcher_type"
+    if ! is_watcher_configured "codex"; then
+        echo "Error: CODEX_FEISHU_WEBHOOK is not configured in .env" >&2
+        exit 1
     fi
+
+    start_watcher_process "$watcher_type"
 
     wait
 }
 
 start_command() {
-    local watcher_type="${1:-all}"
+    local watcher_type
+    watcher_type=$(normalize_watcher_type "${1:-codex}")
 
-    if [ "$watcher_type" = "all" ]; then
-        local configured_watchers
-        configured_watchers=$(get_configured_watchers)
-
-        if [ -z "$configured_watchers" ]; then
-            echo "Error: No watchers configured. Please set CODEX_FEISHU_WEBHOOK or CLAUDE_FEISHU_WEBHOOK in .env" >&2
-            exit 1
-        fi
-
-        IFS=',' read -ra watchers <<< "$configured_watchers"
-        for watcher in "${watchers[@]}"; do
-            watcher=$(echo "$watcher" | xargs)
-            if [ -n "$watcher" ]; then
-                start_watcher_process "$watcher" || true
-            fi
-        done
-    else
-        start_watcher_process "$watcher_type"
+    if ! is_watcher_configured "codex"; then
+        echo "Error: CODEX_FEISHU_WEBHOOK is not configured in .env" >&2
+        exit 1
     fi
+
+    start_watcher_process "$watcher_type"
 }
 
 stop_command() {
-    local watcher_type="${1:-all}"
-
-    if [ "$watcher_type" = "all" ]; then
-        # 停止所有可能运行的监测器
-        for watcher in codex claude; do
-            stop_watcher_process "$watcher" 2>/dev/null || true
-        done
-    else
-        stop_watcher_process "$watcher_type"
-    fi
+    local watcher_type
+    watcher_type=$(normalize_watcher_type "${1:-codex}")
+    stop_watcher_process "$watcher_type"
 }
 
 status_command() {
-    local watcher_type="${1:-all}"
+    local watcher_type
+    watcher_type=$(normalize_watcher_type "${1:-codex}")
 
     echo "Runtime log: $RUNTIME_LOG"
     echo "Error log: $ERROR_LOG_FILE"
@@ -315,132 +276,32 @@ status_command() {
     fi
     echo ""
 
-    if [ "$watcher_type" = "all" ]; then
-        # 显示所有监测器的状态
-        for watcher in codex claude; do
-            if is_watcher_configured "$watcher"; then
-                status_watcher_process "$watcher" || true
-            else
-                echo "${watcher} watcher: not configured"
-            fi
-        done
-    else
+    if is_watcher_configured "$watcher_type"; then
         status_watcher_process "$watcher_type"
+    else
+        echo "${watcher_type} watcher: not configured"
     fi
 }
 
 test_notify() {
-    local configured_watchers
-    configured_watchers=$(get_configured_watchers)
-
-    if [ -z "$configured_watchers" ]; then
-        echo "Error: No watchers configured. Please set CODEX_FEISHU_WEBHOOK or CLAUDE_FEISHU_WEBHOOK in .env" >&2
+    if ! is_watcher_configured "codex"; then
+        echo "Error: CODEX_FEISHU_WEBHOOK is not configured in .env" >&2
         exit 1
     fi
 
-    local success=true
-
-    IFS=',' read -ra watchers <<< "$configured_watchers"
-    for watcher in "${watchers[@]}"; do
-        watcher=$(echo "$watcher" | xargs)
-        if [ -z "$watcher" ]; then
-            continue
-        fi
-
-        echo "Testing ${watcher} notification..."
-        local message=""
-        case "$watcher" in
-            codex)
-                message="Codex 飞书通知链路测试。"
-                ;;
-            claude)
-                message="Claude Code 飞书通知链路测试。"
-                ;;
-        esac
-
-        if send_feishu_notification "$watcher" "$message"; then
-            echo "✓ ${watcher} notification sent successfully."
-        else
-            echo "✗ ${watcher} notification failed." >&2
-            success=false
-        fi
-    done
-
-    if [ "$success" = false ]; then
+    echo "Testing codex notification..."
+    if send_feishu_notification "codex" "Codex 飞书通知链路测试。"; then
+        echo "✓ codex notification sent successfully."
+    else
+        echo "✗ codex notification failed." >&2
         exit 1
     fi
-}
-
-init_command() {
-    local target_scope="local"
-    local force=0
-    local arg
-    local template_file="$REPO_ROOT/.env.example"
-    local target_file
-
-    for arg in "$@"; do
-        case "$arg" in
-            --local)
-                target_scope="local"
-                ;;
-            --global)
-                target_scope="global"
-                ;;
-            --force)
-                force=1
-                ;;
-            -h|--help)
-                usage
-                return 0
-                ;;
-            *)
-                echo "Error: unknown init option: $arg" >&2
-                usage
-                return 1
-                ;;
-        esac
-    done
-
-    if [ ! -f "$template_file" ]; then
-        echo "Error: config template not found: $template_file" >&2
-        return 1
-    fi
-
-    case "$target_scope" in
-        local)
-            target_file="${PWD:-$(pwd)}/.env"
-            ;;
-        global)
-            target_file=$(default_user_env_file)
-            if [ -z "$target_file" ]; then
-                echo "Error: HOME or XDG_CONFIG_HOME is required for --global config." >&2
-                return 1
-            fi
-            ;;
-    esac
-
-    if [ -f "$target_file" ] && [ "$force" -ne 1 ]; then
-        echo "Config already exists: $target_file"
-        echo "Use --force to overwrite it."
-        return 1
-    fi
-
-    mkdir -p "$(dirname "$target_file")"
-    cp "$template_file" "$target_file"
-    chmod 600 "$target_file" 2>/dev/null || true
-
-    echo "Created config file: $target_file"
-    echo "Edit it and fill in your Feishu webhook."
 }
 
 COMMAND="${1:-}"
-WATCHER_TYPE="${2:-all}"
+WATCHER_TYPE="${2:-codex}"
 
 case "$COMMAND" in
-    init)
-        shift
-        init_command "$@"
-        ;;
     run)
         load_config
         run_command "$WATCHER_TYPE"
