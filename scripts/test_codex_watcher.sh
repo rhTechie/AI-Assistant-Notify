@@ -6,6 +6,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 TMP_DIR=$(mktemp -d)
 CODEX_LOG_FILE="$TMP_DIR/codex-tui.log"
+CODEX_SESSIONS_DIR="$TMP_DIR/sessions"
 RUNTIME_LOG="$TMP_DIR/runtime.log"
 EVENT_LOG="$TMP_DIR/events.log"
 
@@ -19,6 +20,13 @@ cleanup() {
 
 append_line() {
     printf '%s\n' "$1" >> "$CODEX_LOG_FILE"
+}
+
+append_rollout_line() {
+    local file_path="$1"
+    local line="$2"
+
+    printf '%s\n' "$line" >> "$file_path"
 }
 
 assert_contains() {
@@ -70,6 +78,33 @@ trap cleanup EXIT
 
 (
     export CODEX_LOG_FILE
+    export CODEX_SESSIONS_DIR
+    source "$REPO_ROOT/scripts/watchers/codex_watcher.sh"
+
+    if ! version_gt "0.135.0" "0.134.0"; then
+        echo "Expected 0.135.0 to be newer than 0.134.0." >&2
+        exit 1
+    fi
+
+    if version_gt "0.134.0" "0.135.0"; then
+        echo "Expected 0.134.0 to not be newer than 0.135.0." >&2
+        exit 1
+    fi
+
+    if [ "$(codex_compatibility_status "0.135.0")" != "ok" ]; then
+        echo "Expected compatibility status for 0.135.0 to be ok." >&2
+        exit 1
+    fi
+
+    if [ "$(codex_compatibility_status "0.136.0")" != "recheck needed" ]; then
+        echo "Expected compatibility status for 0.136.0 to require recheck." >&2
+        exit 1
+    fi
+)
+
+(
+    export CODEX_LOG_FILE
+    export CODEX_SESSIONS_DIR
     source "$REPO_ROOT/scripts/watchers/codex_watcher.sh"
 
     notify_callback() {
@@ -121,3 +156,64 @@ if [ "$event_count" -ne 3 ]; then
 fi
 
 echo "codex watcher replay test passed."
+
+kill "$WATCHER_PID" 2>/dev/null || true
+wait "$WATCHER_PID" 2>/dev/null || true
+WATCHER_PID=""
+
+: > "$EVENT_LOG"
+mkdir -p "$CODEX_SESSIONS_DIR/2026/05/29"
+rm -f "$CODEX_LOG_FILE"
+
+ROLLOUT_FILE="$CODEX_SESSIONS_DIR/2026/05/29/rollout-2026-05-29T15-53-42-019e72b9-87cb-79b1-b8cf-534ecf01bec7.jsonl"
+: > "$ROLLOUT_FILE"
+
+(
+    export CODEX_LOG_FILE
+    export CODEX_SESSIONS_DIR
+    source "$REPO_ROOT/scripts/watchers/codex_watcher.sh"
+
+    notify_callback() {
+        local watcher_type="$1"
+        local event_type="$2"
+        local message="$3"
+        local thread_id="$4"
+        local turn_id="$5"
+
+        printf '%s|%s|%s|%s|%s\n' \
+            "$watcher_type" \
+            "$event_type" \
+            "$thread_id" \
+            "$turn_id" \
+            "$message" >> "$EVENT_LOG"
+    }
+
+    codex_watcher_run notify_callback "$RUNTIME_LOG"
+) &
+WATCHER_PID=$!
+
+sleep 1.2
+
+append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:53:58.199Z","type":"session_meta","payload":{"id":"019e72b9-87cb-79b1-b8cf-534ecf01bec7","timestamp":"2026-05-29T07:53:42.098Z","cwd":"/tmp/project-rollout","originator":"codex-tui"}}'
+append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:53:58.200Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-rollout-complete","started_at":1780041238}}'
+append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:54:10.023Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"pwd\",\"workdir\":\"/tmp/project-rollout\",\"yield_time_ms\":1000}","call_id":"call-rollout-complete"}}'
+append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:54:21.023Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-rollout-complete","completed_at":1780041261}}'
+append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:55:58.200Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-rollout-interrupt","started_at":1780041358}}'
+append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:56:10.023Z","type":"response_item","payload":{"type":"function_call","name":"apply_patch","arguments":"*** Begin Patch\n*** End Patch","call_id":"call-rollout-interrupt"}}'
+append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:56:12.023Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-rollout-interrupt","reason":"interrupted","completed_at":1780041372}}'
+append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:56:13.023Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-rollout-interrupt","completed_at":1780041373}}'
+
+wait_for_event_count 2
+
+assert_contains 'codex|turn_complete|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-complete|'
+assert_contains 'codex|turn_interrupted|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-interrupt|'
+assert_not_contains 'codex|turn_complete|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-interrupt|'
+
+event_count=$(wc -l < "$EVENT_LOG")
+if [ "$event_count" -ne 2 ]; then
+    echo "Expected 2 rollout watcher events, got $event_count." >&2
+    cat "$EVENT_LOG" >&2
+    exit 1
+fi
+
+echo "codex rollout watcher replay test passed."

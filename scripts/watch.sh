@@ -126,7 +126,7 @@ start_watcher_process() {
     # 导出必要的环境变量和函数
     export STATE_DIR RUNTIME_LOG ERROR_LOG_FILE
     export CODEX_FEISHU_WEBHOOK CODEX_FEISHU_KEYWORD
-    export CODEX_LOG_FILE
+    export CODEX_LOG_FILE CODEX_SESSIONS_DIR
     export -f notify_callback send_feishu_notification json_escape append_log
 
     if command -v setsid >/dev/null 2>&1; then
@@ -207,6 +207,10 @@ stop_watcher_process() {
 status_watcher_process() {
     local watcher_type="$1"
     local pid_file="$STATE_DIR/${watcher_type}_watcher.pid"
+    local watcher_script="$SCRIPT_DIR/watchers/${watcher_type}_watcher.sh"
+    local installed_version=""
+    local latest_version=""
+    local compatibility_status=""
 
     if is_watcher_running "$pid_file" "${watcher_type}_watcher.sh run"; then
         local pid
@@ -214,6 +218,22 @@ status_watcher_process() {
         echo "${watcher_type} watcher is running (pid ${pid:-unknown})."
     else
         echo "${watcher_type} watcher is not running."
+    fi
+
+    if [ -f "$watcher_script" ]; then
+        # shellcheck disable=SC1090
+        source "$watcher_script"
+        installed_version=$(codex_installed_version_detect 2>/dev/null || true)
+        latest_version=$(codex_latest_version_detect 2>/dev/null || true)
+        compatibility_status=$(codex_compatibility_status "$installed_version")
+
+        if codex_watcher_init >/dev/null 2>&1; then
+            echo "Codex source: ${CODEX_WATCH_SOURCE:-unknown}"
+        fi
+        echo "Codex installed: ${installed_version:-unknown}"
+        echo "Codex verified: ${CODEX_WATCHER_VERIFIED_MAX_VERSION:-unknown}"
+        echo "Codex latest: ${latest_version:-unknown}"
+        echo "Compatibility: ${compatibility_status:-unknown}"
     fi
 }
 
