@@ -81,23 +81,23 @@ trap cleanup EXIT
     export CODEX_SESSIONS_DIR
     source "$REPO_ROOT/scripts/watchers/codex_watcher.sh"
 
-    if ! version_gt "0.135.0" "0.134.0"; then
-        echo "Expected 0.135.0 to be newer than 0.134.0." >&2
+    if ! version_gt "0.137.0" "0.136.0"; then
+        echo "Expected 0.137.0 to be newer than 0.136.0." >&2
         exit 1
     fi
 
-    if version_gt "0.134.0" "0.135.0"; then
-        echo "Expected 0.134.0 to not be newer than 0.135.0." >&2
+    if version_gt "0.136.0" "0.137.0"; then
+        echo "Expected 0.136.0 to not be newer than 0.137.0." >&2
         exit 1
     fi
 
-    if [ "$(codex_compatibility_status "0.135.0")" != "ok" ]; then
-        echo "Expected compatibility status for 0.135.0 to be ok." >&2
+    if [ "$(codex_compatibility_status "0.137.0")" != "ok" ]; then
+        echo "Expected compatibility status for 0.137.0 to be ok." >&2
         exit 1
     fi
 
-    if [ "$(codex_compatibility_status "0.136.0")" != "recheck needed" ]; then
-        echo "Expected compatibility status for 0.136.0 to require recheck." >&2
+    if [ "$(codex_compatibility_status "0.138.0")" != "recheck needed" ]; then
+        echo "Expected compatibility status for 0.138.0 to require recheck." >&2
         exit 1
     fi
 )

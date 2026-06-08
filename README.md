@@ -74,7 +74,7 @@ CODEX_FEISHU_KEYWORD="Codex提醒"
 - `Codex latest`：当前检测到的可升级最新版本
 - `Compatibility`：当前已安装版本是否还在已验证范围内
 
-如果 `Compatibility` 显示为 `recheck needed`，说明当前已安装版本已经高于脚本已验证范围，最好重新做一次兼容性检查。
+如果 `Compatibility` 显示为 `recheck needed`，说明当前已安装版本已经高于脚本已验证范围，最好重新做一次兼容性检查，并在确认无回归后同步更新仓库里的已验证版本上限。
 
 ### 6. 停止监测
 
