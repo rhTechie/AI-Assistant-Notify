@@ -91,13 +91,13 @@ trap cleanup EXIT
         exit 1
     fi
 
-    if [ "$(codex_compatibility_status "0.141.0")" != "ok" ]; then
-        echo "Expected compatibility status for 0.141.0 to be ok." >&2
+    if [ "$(codex_compatibility_status "0.142.0")" != "ok" ]; then
+        echo "Expected compatibility status for 0.142.0 to be ok." >&2
         exit 1
     fi
 
-    if [ "$(codex_compatibility_status "0.142.0")" != "recheck needed" ]; then
-        echo "Expected compatibility status for 0.142.0 to require recheck." >&2
+    if [ "$(codex_compatibility_status "0.143.0")" != "recheck needed" ]; then
+        echo "Expected compatibility status for 0.143.0 to require recheck." >&2
         exit 1
     fi
 )
