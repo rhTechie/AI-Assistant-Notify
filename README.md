@@ -1,6 +1,6 @@
 # AI Assistant Notify
 
-监测 Codex 对话状态，并在完成或中断时通过飞书机器人发送通知。
+监测 Codex 对话状态，并在完成、中断或失败时通过飞书机器人发送通知。
 当前脚本会自动兼容两类 Codex 本地数据源：
 
 - 旧版 `~/.codex/log/codex-tui.log`
@@ -8,14 +8,16 @@
 
 ## 功能
 
-- 监测 Codex turn 完成和中断事件
-- 发送 Codex 完成通知
-- 发送 Codex 中断通知
+- 监测 Codex 主会话 turn 的完成、中断和失败事件
+- 多 Agent 模式下忽略内部子会话，只通知用户主会话
+- 通知只包含项目名和工具名，不发送完整命令参数或绝对路径
+- 飞书临时失败支持有边界的超时与重试
 
 ## 使用前提
 
 - 本机可运行 `bash`
 - 本机可运行 `curl`
+- 本机可运行 `flock`
 - 已经安装并在使用 Codex
 
 ## 获取仓库
@@ -44,6 +46,12 @@ cp .env.example .env
 ```bash
 CODEX_FEISHU_WEBHOOK="https://open.feishu.cn/open-apis/bot/v2/hook/your-codex-webhook"
 CODEX_FEISHU_KEYWORD="Codex提醒"
+
+# 可选，以下均为默认值
+FEISHU_NOTIFY_CONNECT_TIMEOUT_SECONDS=5
+FEISHU_NOTIFY_MAX_TIME_SECONDS=15
+FEISHU_NOTIFY_MAX_ATTEMPTS=3
+FEISHU_NOTIFY_RETRY_BACKOFF_SECONDS=1
 ```
 
 配置文件固定为仓库根目录 `.env`。
@@ -84,7 +92,7 @@ CODEX_FEISHU_KEYWORD="Codex提醒"
 
 ## 测试与自检
 
-语法检查加 Codex watcher 回放测试：
+语法检查、进程管理测试、飞书 mock 测试和 Codex watcher 回放测试：
 
 ```bash
 ./scripts/test.sh
@@ -93,7 +101,7 @@ CODEX_FEISHU_KEYWORD="Codex提醒"
 如果脚本没有执行权限，可以先运行：
 
 ```bash
-chmod +x ./scripts/test.sh ./scripts/test_codex_watcher.sh
+chmod +x ./scripts/test.sh ./scripts/test_process_utils.sh ./scripts/test_notify.sh ./scripts/test_codex_watcher.sh
 ```
 
 ## 排障

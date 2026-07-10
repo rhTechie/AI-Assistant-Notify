@@ -17,6 +17,10 @@ Arguments:
 Environment:
   CODEX_FEISHU_WEBHOOK            Feishu webhook URL for Codex notifications.
   CODEX_FEISHU_KEYWORD            Optional. Keyword for Codex. Default: Codex提醒
+  FEISHU_NOTIFY_CONNECT_TIMEOUT_SECONDS  Optional. Connect timeout. Default: 5
+  FEISHU_NOTIFY_MAX_TIME_SECONDS         Optional. Total request timeout. Default: 15
+  FEISHU_NOTIFY_MAX_ATTEMPTS             Optional. Maximum attempts. Default: 3
+  FEISHU_NOTIFY_RETRY_BACKOFF_SECONDS    Optional. Linear retry backoff. Default: 1
 
 Note:
   - 配置文件固定为仓库根目录 .env
@@ -37,11 +41,44 @@ source "$SCRIPT_DIR/utils/process_utils.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/utils/log_utils.sh"
 
+umask 077
+
 STATE_DIR="${TMPDIR:-/tmp}/ai-assistant-notify"
 RUNTIME_LOG="$STATE_DIR/watch-runtime.log"
 ERROR_LOG_FILE="$STATE_DIR/watch-errors.log"
 
-mkdir -p "$STATE_DIR"
+secure_state_dir "$STATE_DIR"
+secure_state_file "$RUNTIME_LOG"
+secure_state_file "$ERROR_LOG_FILE"
+secure_state_file "$STATE_DIR/codex_watcher.pid"
+secure_state_file "$STATE_DIR/codex_watcher.lock"
+
+watcher_process_marker() {
+    local watcher_type="$1"
+
+    printf 'ai-assistant-notify:%s:%s:%s\n' "$watcher_type" "$REPO_ROOT" "$STATE_DIR"
+}
+
+legacy_watcher_command() {
+    local watcher_type="$1"
+    local watcher_script="$SCRIPT_DIR/watchers/${watcher_type}_watcher.sh"
+    local pid_file="$STATE_DIR/${watcher_type}_watcher.pid"
+    local lock_file="$STATE_DIR/${watcher_type}_watcher.lock"
+
+    printf '%s' "
+            # 重新加载工具函数
+            source \"$SCRIPT_DIR/utils/log_utils.sh\"
+            source \"$SCRIPT_DIR/utils/process_utils.sh\"
+            source \"$SCRIPT_DIR/lib_notify.sh\"
+
+            printf '%s\\n' \"\$\$\" > \"$pid_file\"
+            append_log \"$RUNTIME_LOG\" \"${watcher_type}_watcher started pid=\$\$\"
+            trap 'if [ -f \"$pid_file\" ] && [ \"\$(cat \"$pid_file\" 2>/dev/null)\" = \"\$\$\" ]; then rm -f \"$pid_file\"; fi; rm -f \"$lock_file\"' EXIT
+
+            source \"$watcher_script\"
+            ${watcher_type}_watcher_run notify_callback \"$RUNTIME_LOG\"
+        "
+}
 
 load_config() {
     load_repo_env "$ENV_FILE"
@@ -91,6 +128,12 @@ start_watcher_process() {
     local watcher_script="$SCRIPT_DIR/watchers/${watcher_type}_watcher.sh"
     local pid_file="$STATE_DIR/${watcher_type}_watcher.pid"
     local lock_file="$STATE_DIR/${watcher_type}_watcher.lock"
+    local marker
+    local legacy_command
+    local child_command
+
+    marker=$(watcher_process_marker "$watcher_type")
+    legacy_command=$(legacy_watcher_command "$watcher_type")
 
     if ! is_watcher_configured "$watcher_type"; then
         echo "Warning: ${watcher_type} webhook not configured, skipping." >&2
@@ -110,7 +153,7 @@ start_watcher_process() {
         return 1
     fi
 
-    if is_watcher_running "$pid_file" "${watcher_type}_watcher.sh run"; then
+    if is_watcher_running "$pid_file" "$marker" "$legacy_command"; then
         local pid
         pid=$(read_pid_file "$pid_file")
         echo "${watcher_type} watcher is already running (pid ${pid:-unknown})."
@@ -129,39 +172,29 @@ start_watcher_process() {
     export CODEX_LOG_FILE CODEX_SESSIONS_DIR
     export -f notify_callback send_feishu_notification json_escape append_log
 
+    child_command="
+            # 重新加载工具函数
+            source \"$SCRIPT_DIR/utils/log_utils.sh\"
+            source \"$SCRIPT_DIR/utils/process_utils.sh\"
+            source \"$SCRIPT_DIR/lib_notify.sh\"
+
+            write_pid_file \"$pid_file\" \"\$\$\"
+            append_log \"$RUNTIME_LOG\" \"${watcher_type}_watcher started pid=\$\$\"
+            trap 'remove_pid_file_for_pid \"$pid_file\" \"\$\$\"' EXIT
+
+            source \"$watcher_script\"
+            ${watcher_type}_watcher_run notify_callback \"$RUNTIME_LOG\"
+        "
+
     if command -v setsid >/dev/null 2>&1; then
-        nohup setsid bash -c "
-            # 重新加载工具函数
-            source \"$SCRIPT_DIR/utils/log_utils.sh\"
-            source \"$SCRIPT_DIR/utils/process_utils.sh\"
-            source \"$SCRIPT_DIR/lib_notify.sh\"
-
-            printf '%s\n' \"\$\$\" > \"$pid_file\"
-            append_log \"$RUNTIME_LOG\" \"${watcher_type}_watcher started pid=\$\$\"
-            trap 'if [ -f \"$pid_file\" ] && [ \"\$(cat \"$pid_file\" 2>/dev/null)\" = \"\$\$\" ]; then rm -f \"$pid_file\"; fi; rm -f \"$lock_file\"' EXIT
-
-            source \"$watcher_script\"
-            ${watcher_type}_watcher_run notify_callback \"$RUNTIME_LOG\"
-        " </dev/null >>"$RUNTIME_LOG" 2>&1 &
+        nohup setsid bash -c "$child_command" "$marker" </dev/null >>"$RUNTIME_LOG" 2>&1 &
     else
-        nohup bash -c "
-            # 重新加载工具函数
-            source \"$SCRIPT_DIR/utils/log_utils.sh\"
-            source \"$SCRIPT_DIR/utils/process_utils.sh\"
-            source \"$SCRIPT_DIR/lib_notify.sh\"
-
-            printf '%s\n' \"\$\$\" > \"$pid_file\"
-            append_log \"$RUNTIME_LOG\" \"${watcher_type}_watcher started pid=\$\$\"
-            trap 'if [ -f \"$pid_file\" ] && [ \"\$(cat \"$pid_file\" 2>/dev/null)\" = \"\$\$\" ]; then rm -f \"$pid_file\"; fi; rm -f \"$lock_file\"' EXIT
-
-            source \"$watcher_script\"
-            ${watcher_type}_watcher_run notify_callback \"$RUNTIME_LOG\"
-        " </dev/null >>"$RUNTIME_LOG" 2>&1 &
+        nohup bash -c "$child_command" "$marker" </dev/null >>"$RUNTIME_LOG" 2>&1 &
     fi
 
     sleep 1
 
-    if is_watcher_running "$pid_file" "${watcher_type}_watcher.sh run"; then
+    if is_watcher_running "$pid_file" "$marker" "$legacy_command"; then
         local pid
         pid=$(read_pid_file "$pid_file")
         echo "${watcher_type} watcher started (pid ${pid:-unknown})."
@@ -175,27 +208,32 @@ start_watcher_process() {
 stop_watcher_process() {
     local watcher_type="$1"
     local pid_file="$STATE_DIR/${watcher_type}_watcher.pid"
-    local lock_file="$STATE_DIR/${watcher_type}_watcher.lock"
     local pid
     local pids
     local stopped=0
+    local marker
+    local legacy_command
+
+    marker=$(watcher_process_marker "$watcher_type")
+    legacy_command=$(legacy_watcher_command "$watcher_type")
 
     pid=$(read_pid_file "$pid_file")
-    if pid_is_alive "$pid"; then
-        terminate_pid "$pid"
+    if terminate_pid "$pid" "$marker" "$legacy_command"; then
         stopped=1
     fi
 
-    pids=$(list_running_pids "${watcher_type}_watcher.sh run" || true)
-    if [ -n "$pids" ]; then
-        printf '%s\n' "$pids" | while IFS= read -r pid; do
-            [ -n "$pid" ] || continue
-            terminate_pid "$pid"
-        done
-        stopped=1
-    fi
+    pids=$(list_running_pids "$marker" "$legacy_command" || true)
+    while IFS= read -r pid; do
+        [ -n "$pid" ] || continue
+        if terminate_pid "$pid" "$marker" "$legacy_command"; then
+            stopped=1
+        fi
+    done <<< "$pids"
 
-    rm -f "$pid_file" "$lock_file"
+    pid=$(read_pid_file "$pid_file")
+    if ! watcher_process_matches "$pid" "$marker" "$legacy_command"; then
+        rm -f -- "$pid_file"
+    fi
 
     if [ "$stopped" -eq 1 ]; then
         echo "${watcher_type} watcher stopped."
@@ -211,8 +249,13 @@ status_watcher_process() {
     local installed_version=""
     local latest_version=""
     local compatibility_status=""
+    local marker
+    local legacy_command
 
-    if is_watcher_running "$pid_file" "${watcher_type}_watcher.sh run"; then
+    marker=$(watcher_process_marker "$watcher_type")
+    legacy_command=$(legacy_watcher_command "$watcher_type")
+
+    if is_watcher_running "$pid_file" "$marker" "$legacy_command"; then
         local pid
         pid=$(read_pid_file "$pid_file")
         echo "${watcher_type} watcher is running (pid ${pid:-unknown})."

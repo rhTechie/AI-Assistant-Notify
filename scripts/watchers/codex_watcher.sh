@@ -15,7 +15,8 @@ CODEX_SESSIONS_DIR="${CODEX_SESSIONS_DIR:-$HOME/.codex/sessions}"
 CODEX_VERSION_FILE="${CODEX_VERSION_FILE:-$HOME/.codex/version.json}"
 CODEX_CLI_PACKAGE_FILE="${CODEX_CLI_PACKAGE_FILE:-$HOME/.nvm/versions/node/v24.1.0/lib/node_modules/@openai/codex/package.json}"
 CODEX_WATCH_SOURCE=""
-CODEX_WATCHER_VERIFIED_MAX_VERSION="${CODEX_WATCHER_VERIFIED_MAX_VERSION:-0.143.0}"
+CODEX_WATCHER_VERIFIED_MAX_VERSION="${CODEX_WATCHER_VERIFIED_MAX_VERSION:-0.144.1}"
+CODEX_ROLLOUT_RESTORE_TAIL_LINES="${CODEX_ROLLOUT_RESTORE_TAIL_LINES:-200}"
 
 extract_thread_id() {
     local line="$1"
@@ -55,22 +56,10 @@ is_interrupt_line() {
 
 summarize_legacy_tool_call() {
     local line="$1"
-    local command
+    local tool_name
 
-    if printf '%s\n' "$line" | grep -q 'ToolCall: exec_command '; then
-        command=$(printf '%s\n' "$line" | sed -n 's/.*ToolCall: exec_command {"cmd":"\([^"]*\)".*/\1/p')
-        command=${command//\\\"/\"}
-        command=${command//\\\\/\\}
-        printf 'exec_command %s' "${command:-unknown}"
-        return
-    fi
-
-    if printf '%s\n' "$line" | grep -q 'ToolCall: apply_patch '; then
-        printf 'apply_patch'
-        return
-    fi
-
-    printf '%s\n' "$line" | sed 's/.*ToolCall: //'
+    tool_name=$(printf '%s\n' "$line" | sed -n 's/.*ToolCall: \([^ {]*\).*/\1/p')
+    printf '%s' "${tool_name:-unknown}"
 }
 
 extract_legacy_tool_cwd() {
@@ -106,16 +95,19 @@ build_turn_message() {
         turn_interrupted)
             message="Codex 当前这一问已被中断。"
             ;;
+        turn_failed)
+            message="Codex 当前这一问执行失败，请查看终端中的错误信息。"
+            ;;
         *)
             message="Codex 状态发生变化。"
             ;;
     esac
 
     if [ -n "$cwd" ]; then
-        message="${message} 项目：$(project_name_from_cwd "$cwd")。cwd：${cwd}。"
+        message="${message} 项目：$(project_name_from_cwd "$cwd")。"
     fi
     if [ -n "$context" ]; then
-        message="${message} 最近命令：${context}。"
+        message="${message} 最近工具：${context}。"
     fi
 
     printf '%s' "$message"
@@ -147,14 +139,20 @@ extract_rollout_string_field() {
     printf '%s' "$value"
 }
 
+is_rollout_subagent_session_line() {
+    local line="$1"
+
+    printf '%s\n' "$line" | grep -Eq '"source"[[:space:]]*:[[:space:]]*\{[[:space:]]*"subagent"[[:space:]]*:'
+}
+
 resolve_codex_watch_source() {
-    if [ -f "$CODEX_LOG_FILE" ]; then
-        CODEX_WATCH_SOURCE="legacy_log"
+    if [ -d "$CODEX_SESSIONS_DIR" ]; then
+        CODEX_WATCH_SOURCE="rollout_jsonl"
         return 0
     fi
 
-    if [ -d "$CODEX_SESSIONS_DIR" ]; then
-        CODEX_WATCH_SOURCE="rollout_jsonl"
+    if [ -f "$CODEX_LOG_FILE" ]; then
+        CODEX_WATCH_SOURCE="legacy_log"
         return 0
     fi
 
@@ -271,6 +269,18 @@ emit_turn_complete() {
     "$notify_callback" "codex" "turn_complete" "$message" "$thread_id" "$turn_id"
 }
 
+emit_turn_failed() {
+    local notify_callback="$1"
+    local thread_id="$2"
+    local turn_id="$3"
+    local cwd="$4"
+    local context="$5"
+
+    local message
+    message=$(build_turn_message "turn_failed" "$cwd" "$context")
+    "$notify_callback" "codex" "turn_failed" "$message" "$thread_id" "$turn_id"
+}
+
 watch_rollout_jsonl() {
     local notify_callback="$1"
     local runtime_log="$2"
@@ -278,11 +288,41 @@ watch_rollout_jsonl() {
 
     declare -A rollout_offset_by_file=()
     declare -A rollout_session_by_file=()
+    declare -A rollout_ignored_by_file=()
     declare -A session_cwd_by_id=()
     declare -A active_turn_by_session=()
     declare -A turn_context_by_id=()
     declare -A turn_cwd_by_id=()
     declare -A turn_interrupted_by_id=()
+
+    restore_rollout_terminal_state() {
+        local file_path="$1"
+        local line payload_type turn_id
+
+        while IFS= read -r line; do
+            payload_type=$(printf '%s\n' "$line" | sed -n 's/.*"payload":{"type":"\([^"]*\)".*/\1/p')
+            case "$payload_type" in
+                task_started)
+                    turn_id=$(extract_rollout_string_field "$line" "turn_id")
+                    if is_valid_map_key "$turn_id"; then
+                        turn_interrupted_by_id["$turn_id"]=0
+                    fi
+                    ;;
+                turn_aborted)
+                    turn_id=$(extract_rollout_string_field "$line" "turn_id")
+                    if is_valid_map_key "$turn_id"; then
+                        turn_interrupted_by_id["$turn_id"]=1
+                    fi
+                    ;;
+                task_complete|task_failed)
+                    turn_id=$(extract_rollout_string_field "$line" "turn_id")
+                    if is_valid_map_key "$turn_id"; then
+                        unset "turn_interrupted_by_id[$turn_id]"
+                    fi
+                    ;;
+            esac
+        done < <(tail -n "$CODEX_ROLLOUT_RESTORE_TAIL_LINES" "$file_path" 2>/dev/null || true)
+    }
 
     seed_rollout_file_state() {
         local file_path="$1"
@@ -297,6 +337,11 @@ watch_rollout_jsonl() {
 
         session_line=$(sed -n '1p' "$file_path" 2>/dev/null || true)
         if printf '%s\n' "$session_line" | grep -q '"type":"session_meta"'; then
+            if is_rollout_subagent_session_line "$session_line"; then
+                rollout_ignored_by_file["$file_path"]=1
+                return
+            fi
+
             session_id=$(extract_rollout_string_field "$session_line" "id")
             cwd=$(extract_rollout_string_field "$session_line" "cwd")
             if is_valid_map_key "$session_id"; then
@@ -304,17 +349,31 @@ watch_rollout_jsonl() {
                 session_cwd_by_id["$session_id"]="$cwd"
             fi
         fi
+
+        if [ "$initial_offset" -gt 0 ]; then
+            restore_rollout_terminal_state "$file_path"
+        fi
     }
 
     process_rollout_line() {
         local file_path="$1"
         local line="$2"
-        local session_id payload_type turn_id cwd context
+        local session_id payload_type turn_id cwd
+
+        if [ "${rollout_ignored_by_file[$file_path]:-0}" = "1" ]; then
+            return
+        fi
 
         session_id="${rollout_session_by_file[$file_path]:-}"
         payload_type=$(printf '%s\n' "$line" | sed -n 's/.*"payload":{"type":"\([^"]*\)".*/\1/p')
 
         if printf '%s\n' "$line" | grep -q '"type":"session_meta"'; then
+            if is_rollout_subagent_session_line "$line"; then
+                rollout_ignored_by_file["$file_path"]=1
+                unset "rollout_session_by_file[$file_path]"
+                return
+            fi
+
             session_id=$(extract_rollout_string_field "$line" "id")
             cwd=$(extract_rollout_string_field "$line" "cwd")
             if is_valid_map_key "$session_id"; then
@@ -347,10 +406,7 @@ watch_rollout_jsonl() {
             fi
 
             if printf '%s\n' "$line" | grep -q '"name":"exec_command"'; then
-                context=$(printf '%s\n' "$line" | sed -n 's/.*"name":"exec_command".*"cmd":"\([^"]*\)".*/exec_command \1/p')
-                context=${context//\\\"/\"}
-                context=${context//\\\\/\\}
-                turn_context_by_id["$turn_id"]="${context:-exec_command}"
+                turn_context_by_id["$turn_id"]="exec_command"
 
                 cwd=$(extract_rollout_string_field "$line" "workdir")
                 if [ -n "$cwd" ]; then
@@ -392,15 +448,26 @@ watch_rollout_jsonl() {
         fi
 
         if [ "${turn_interrupted_by_id[$turn_id]:-0}" != "1" ]; then
-            emit_turn_complete \
-                "$notify_callback" \
-                "${session_id:-unknown}" \
-                "$turn_id" \
-                "${turn_cwd_by_id[$turn_id]:-${session_cwd_by_id[$session_id]:-}}" \
-                "${turn_context_by_id[$turn_id]:-}"
+            if [ "$payload_type" = "task_failed" ]; then
+                emit_turn_failed \
+                    "$notify_callback" \
+                    "${session_id:-unknown}" \
+                    "$turn_id" \
+                    "${turn_cwd_by_id[$turn_id]:-${session_cwd_by_id[$session_id]:-}}" \
+                    "${turn_context_by_id[$turn_id]:-}"
+            else
+                emit_turn_complete \
+                    "$notify_callback" \
+                    "${session_id:-unknown}" \
+                    "$turn_id" \
+                    "${turn_cwd_by_id[$turn_id]:-${session_cwd_by_id[$session_id]:-}}" \
+                    "${turn_context_by_id[$turn_id]:-}"
+            fi
         fi
 
-        unset "active_turn_by_session[$session_id]"
+        if [ "${active_turn_by_session[$session_id]:-}" = "$turn_id" ]; then
+            unset "active_turn_by_session[$session_id]"
+        fi
         unset "turn_context_by_id[$turn_id]"
         unset "turn_cwd_by_id[$turn_id]"
         unset "turn_interrupted_by_id[$turn_id]"
@@ -426,6 +493,11 @@ watch_rollout_jsonl() {
             fi
 
             line_count=$(wc -l < "$file" 2>/dev/null || echo "0")
+            if [ "${rollout_ignored_by_file[$file]:-0}" = "1" ]; then
+                rollout_offset_by_file["$file"]="$line_count"
+                continue
+            fi
+
             if [ "$line_count" -le "${rollout_offset_by_file[$file]:-0}" ]; then
                 continue
             fi
