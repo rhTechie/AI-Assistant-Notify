@@ -15,7 +15,7 @@ CODEX_SESSIONS_DIR="${CODEX_SESSIONS_DIR:-$HOME/.codex/sessions}"
 CODEX_VERSION_FILE="${CODEX_VERSION_FILE:-$HOME/.codex/version.json}"
 CODEX_CLI_PACKAGE_FILE="${CODEX_CLI_PACKAGE_FILE:-$HOME/.nvm/versions/node/v24.1.0/lib/node_modules/@openai/codex/package.json}"
 CODEX_WATCH_SOURCE=""
-CODEX_WATCHER_VERIFIED_MAX_VERSION="${CODEX_WATCHER_VERIFIED_MAX_VERSION:-0.144.6}"
+CODEX_WATCHER_VERIFIED_MAX_VERSION="${CODEX_WATCHER_VERIFIED_MAX_VERSION:-0.147.0}"
 CODEX_ROLLOUT_RESTORE_TAIL_LINES="${CODEX_ROLLOUT_RESTORE_TAIL_LINES:-200}"
 
 extract_thread_id() {
@@ -287,6 +287,8 @@ watch_rollout_jsonl() {
     local sessions_dir="$3"
 
     declare -A rollout_offset_by_file=()
+    declare -A rollout_size_by_file=()
+    declare -A rollout_head_by_file=()
     declare -A rollout_session_by_file=()
     declare -A rollout_ignored_by_file=()
     declare -A session_cwd_by_id=()
@@ -329,7 +331,11 @@ watch_rollout_jsonl() {
         local initial_offset="$2"
         local session_line session_id cwd
 
+        unset "rollout_session_by_file[$file_path]"
+        unset "rollout_ignored_by_file[$file_path]"
         rollout_offset_by_file["$file_path"]="$initial_offset"
+        rollout_size_by_file["$file_path"]="$(wc -c < "$file_path" 2>/dev/null || echo "0")"
+        rollout_head_by_file["$file_path"]="$(sed -n '1p' "$file_path" 2>/dev/null || true)"
         session_id=$(rollout_session_id_from_file "$file_path")
         if [ -n "$session_id" ]; then
             rollout_session_by_file["$file_path"]="$session_id"
@@ -473,7 +479,7 @@ watch_rollout_jsonl() {
         unset "turn_interrupted_by_id[$turn_id]"
     }
 
-    local file line_count
+    local file line_count file_size current_head
     while IFS= read -r file; do
         [ -n "$file" ] || continue
         line_count=$(wc -l < "$file" 2>/dev/null || echo "0")
@@ -493,8 +499,23 @@ watch_rollout_jsonl() {
             fi
 
             line_count=$(wc -l < "$file" 2>/dev/null || echo "0")
+            file_size=$(wc -c < "$file" 2>/dev/null || echo "0")
+            current_head=$(sed -n '1p' "$file" 2>/dev/null || true)
+            if [ "$line_count" -lt "${rollout_offset_by_file[$file]:-0}" ] || {
+                [ -n "${rollout_size_by_file[$file]:-}" ] && \
+                    [ "$file_size" -lt "${rollout_size_by_file[$file]:-}" ]
+            } || {
+                [ -n "${rollout_head_by_file[$file]:-}" ] && \
+                    [ "$current_head" != "${rollout_head_by_file[$file]:-}" ]
+            }; then
+                append_log "$runtime_log" "codex_watcher reset rollout file=$file previous_offset=${rollout_offset_by_file[$file]:-0} line_count=$line_count previous_size=${rollout_size_by_file[$file]:-unknown} file_size=$file_size"
+                seed_rollout_file_state "$file" 0
+            fi
+
             if [ "${rollout_ignored_by_file[$file]:-0}" = "1" ]; then
                 rollout_offset_by_file["$file"]="$line_count"
+                rollout_size_by_file["$file"]="$file_size"
+                rollout_head_by_file["$file"]="$current_head"
                 continue
             fi
 
@@ -507,6 +528,8 @@ watch_rollout_jsonl() {
             done < <(sed -n "$((rollout_offset_by_file[$file] + 1)),$line_count p" "$file")
 
             rollout_offset_by_file["$file"]="$line_count"
+            rollout_size_by_file["$file"]="$file_size"
+            rollout_head_by_file["$file"]="$current_head"
         done
 
         sleep 1

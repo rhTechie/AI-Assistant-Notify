@@ -51,6 +51,17 @@ assert_not_contains() {
     fi
 }
 
+assert_runtime_log_contains() {
+    local expected="$1"
+
+    if ! grep -F -- "$expected" "$RUNTIME_LOG" >/dev/null 2>&1; then
+        echo "Missing expected runtime log: $expected" >&2
+        echo "Runtime log:" >&2
+        [ -f "$RUNTIME_LOG" ] && cat "$RUNTIME_LOG" >&2 || true
+        exit 1
+    fi
+}
+
 wait_for_event_count() {
     local expected_count="$1"
     local attempts=50
@@ -80,6 +91,7 @@ trap cleanup EXIT
     export CODEX_LOG_FILE
     export CODEX_SESSIONS_DIR
     source "$REPO_ROOT/scripts/watchers/codex_watcher.sh"
+    original_path="$PATH"
 
     dual_source_log="$TMP_DIR/dual-source/codex-tui.log"
     dual_source_sessions="$TMP_DIR/dual-source/sessions"
@@ -100,6 +112,33 @@ trap cleanup EXIT
         exit 1
     fi
 
+    fake_bin="$TMP_DIR/fake-bin"
+    mkdir -p "$fake_bin"
+    printf '#!/usr/bin/env bash\nprintf "codex-cli 0.147.1\\n"\n' > "$fake_bin/codex"
+    chmod +x "$fake_bin/codex"
+    PATH="$fake_bin:$original_path"
+    if [ "$(codex_installed_version_detect)" != "0.147.1" ]; then
+        echo "Expected codex_installed_version_detect to prefer codex --version." >&2
+        exit 1
+    fi
+
+    rm -f "$fake_bin/codex"
+    PATH="/usr/bin:/bin"
+    CODEX_CLI_PACKAGE_FILE="$TMP_DIR/codex-package.json"
+    printf '{"version":"0.146.9"}\n' > "$CODEX_CLI_PACKAGE_FILE"
+    if [ "$(codex_installed_version_detect)" != "0.146.9" ]; then
+        echo "Expected codex_installed_version_detect to fall back to package.json." >&2
+        exit 1
+    fi
+
+    CODEX_VERSION_FILE="$TMP_DIR/version.json"
+    printf '{"latest_version":"0.148.0"}\n' > "$CODEX_VERSION_FILE"
+    if [ "$(codex_latest_version_detect)" != "0.148.0" ]; then
+        echo "Expected codex_latest_version_detect to read latest_version." >&2
+        exit 1
+    fi
+    PATH="$original_path"
+
     if ! version_gt "0.141.0" "0.140.0"; then
         echo "Expected 0.141.0 to be newer than 0.140.0." >&2
         exit 1
@@ -110,13 +149,30 @@ trap cleanup EXIT
         exit 1
     fi
 
-    if [ "$(codex_compatibility_status "0.144.6")" != "ok" ]; then
-        echo "Expected compatibility status for 0.144.6 to be ok." >&2
+    if [ "$(codex_compatibility_status "")" != "unknown" ]; then
+        echo "Expected empty installed version to have unknown compatibility status." >&2
         exit 1
     fi
 
-    if [ "$(codex_compatibility_status "0.144.7")" != "recheck needed" ]; then
-        echo "Expected compatibility status for 0.144.7 to require recheck." >&2
+    CODEX_WATCHER_VERIFIED_MAX_VERSION=0.200.0
+    if [ "$(codex_compatibility_status "0.199.9")" != "ok" ]; then
+        echo "Expected compatibility override to mark 0.199.9 as ok." >&2
+        exit 1
+    fi
+
+    if [ "$(codex_compatibility_status "0.200.1")" != "recheck needed" ]; then
+        echo "Expected compatibility override to mark 0.200.1 as recheck needed." >&2
+        exit 1
+    fi
+
+    CODEX_WATCHER_VERIFIED_MAX_VERSION=0.147.0
+    if [ "$(codex_compatibility_status "0.147.0")" != "ok" ]; then
+        echo "Expected compatibility status for 0.147.0 to be ok." >&2
+        exit 1
+    fi
+
+    if [ "$(codex_compatibility_status "0.147.1")" != "recheck needed" ]; then
+        echo "Expected compatibility status for 0.147.1 to require recheck." >&2
         exit 1
     fi
 )
@@ -314,6 +370,64 @@ if [ "$event_count" -ne 1 ]; then
 fi
 
 echo "codex watcher restart state test passed."
+
+kill "$WATCHER_PID" 2>/dev/null || true
+wait "$WATCHER_PID" 2>/dev/null || true
+WATCHER_PID=""
+
+: > "$EVENT_LOG"
+TRUNCATED_ROLLOUT_FILE="$CODEX_SESSIONS_DIR/2026/05/29/rollout-2026-05-29T16-10-00-019e72b9-aaaa-7aaa-8aaa-aaaaaaaaaaaa.jsonl"
+: > "$TRUNCATED_ROLLOUT_FILE"
+append_rollout_line "$TRUNCATED_ROLLOUT_FILE" '{"timestamp":"2026-05-29T08:10:00.000Z","type":"session_meta","payload":{"id":"019e72b9-aaaa-7aaa-8aaa-aaaaaaaaaaaa","timestamp":"2026-05-29T08:10:00.000Z","cwd":"/tmp/truncated-project","originator":"codex-tui"}}'
+append_rollout_line "$TRUNCATED_ROLLOUT_FILE" '{"timestamp":"2026-05-29T08:10:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-before-truncate","started_at":1780042201}}'
+append_rollout_line "$TRUNCATED_ROLLOUT_FILE" '{"timestamp":"2026-05-29T08:10:02.000Z","type":"event_msg","payload":{"type":"response_item_done","item_id":"item-before-truncate"}}'
+
+(
+    export CODEX_LOG_FILE
+    export CODEX_SESSIONS_DIR
+    source "$REPO_ROOT/scripts/watchers/codex_watcher.sh"
+
+    notify_callback() {
+        local watcher_type="$1"
+        local event_type="$2"
+        local message="$3"
+        local thread_id="$4"
+        local turn_id="$5"
+
+        printf '%s|%s|%s|%s|%s\n' \
+            "$watcher_type" \
+            "$event_type" \
+            "$thread_id" \
+            "$turn_id" \
+            "$message" >> "$EVENT_LOG"
+    }
+
+    codex_watcher_run notify_callback "$RUNTIME_LOG"
+) &
+WATCHER_PID=$!
+
+sleep 1.2
+
+: > "$TRUNCATED_ROLLOUT_FILE"
+append_rollout_line "$TRUNCATED_ROLLOUT_FILE" '{"timestamp":"2026-05-29T08:11:00.000Z","type":"session_meta","payload":{"id":"019e72b9-aaaa-7aaa-8aaa-aaaaaaaaaaaa","timestamp":"2026-05-29T08:11:00.000Z","cwd":"/tmp/truncated-project","originator":"codex-tui"}}'
+append_rollout_line "$TRUNCATED_ROLLOUT_FILE" '{"timestamp":"2026-05-29T08:11:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-after-truncate","started_at":1780042261}}'
+append_rollout_line "$TRUNCATED_ROLLOUT_FILE" '{"timestamp":"2026-05-29T08:11:02.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-after-truncate","completed_at":1780042262}}'
+
+wait_for_event_count 1
+sleep 0.5
+
+assert_contains 'codex|turn_complete|019e72b9-aaaa-7aaa-8aaa-aaaaaaaaaaaa|turn-after-truncate|'
+assert_not_contains '|turn-before-truncate|'
+assert_runtime_log_contains "codex_watcher reset rollout file=$TRUNCATED_ROLLOUT_FILE previous_offset=3"
+
+event_count=$(wc -l < "$EVENT_LOG")
+if [ "$event_count" -ne 1 ]; then
+    echo "Expected 1 event after rollout truncation reset, got $event_count." >&2
+    cat "$EVENT_LOG" >&2
+    exit 1
+fi
+
+echo "codex watcher truncation reset test passed."
 
 kill "$WATCHER_PID" 2>/dev/null || true
 wait "$WATCHER_PID" 2>/dev/null || true

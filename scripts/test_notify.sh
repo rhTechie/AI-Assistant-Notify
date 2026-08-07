@@ -219,6 +219,21 @@ test_pre_send_curl_failures_retry() {
     done
 }
 
+test_dns_timeout_retries() {
+    reset_config
+    export FEISHU_NOTIFY_MAX_ATTEMPTS=2
+    export FEISHU_NOTIFY_RETRY_BACKOFF_SECONDS=2
+    set_mock_responses \
+        '28|000||Resolving timed out after 5001 milliseconds' \
+        '0|200|{"code":0}|'
+
+    run_notification
+
+    assert_equals 0 "$LAST_RC" "DNS timeout retry return code"
+    assert_call_count 2 "DNS timeout retry call count"
+    assert_file_contains '2' "$MOCK_SLEEP_LOG"
+}
+
 test_feishu_rate_limit_retries() {
     reset_config
     set_mock_responses \
@@ -311,6 +326,7 @@ test_success_uses_default_timeouts
 test_timeout_overrides_are_forwarded
 test_curl_error_preserves_status_and_stderr
 test_pre_send_curl_failures_retry
+test_dns_timeout_retries
 test_feishu_rate_limit_retries
 test_retryable_http_statuses_retry
 test_permanent_failures_do_not_retry

@@ -42,6 +42,18 @@ feishu_is_retryable_curl_exit() {
     esac
 }
 
+feishu_is_retryable_curl_timeout() {
+    local exit_code="$1"
+    local http_code="$2"
+    local error_output="$3"
+
+    if [ "$exit_code" != "28" ] || [ "${http_code:-000}" != "000" ]; then
+        return 1
+    fi
+
+    printf '%s\n' "$error_output" | grep -Eqi 'resolving timed out|connection timed out|failed to connect'
+}
+
 feishu_is_retryable_http_status() {
     local http_code="$1"
 
@@ -153,7 +165,7 @@ send_feishu_notification() {
         if [ "$exit_code" -ne 0 ]; then
             final_error="Error: failed to send Feishu webhook (curl_exit=$exit_code http_code=${http_code:-unknown} attempt=$attempt/$max_attempts)."
             final_detail="${error_output:-No curl stderr.}"
-            if feishu_is_retryable_curl_exit "$exit_code"; then
+            if feishu_is_retryable_curl_exit "$exit_code" || feishu_is_retryable_curl_timeout "$exit_code" "${http_code:-000}" "$error_output"; then
                 should_retry=1
             fi
         elif [[ "$http_code" =~ ^[0-9]{3}$ ]] && [ "$http_code" -ge 400 ]; then
