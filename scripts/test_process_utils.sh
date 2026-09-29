@@ -203,6 +203,12 @@ started_pid=$(read_pid_file "$cli_state_dir/codex_watcher.pid")
 register_pid "$started_pid"
 started_marker="ai-assistant-notify:codex:$REPO_ROOT:$cli_state_dir"
 wait_for_match "$started_pid" "$started_marker" || fail "Started watcher did not expose the exact marker."
+grep -Fq "codex_watcher ready pid=$started_pid " "$cli_state_dir/watch-runtime.log" || fail "Started watcher did not become ready."
+status_output=$(HOME="$cli_home" TMPDIR="$cli_runtime_root" "$REPO_ROOT/bin/ai-assistant-notify" status codex)
+case "$status_output" in
+    *"codex watcher is running (pid $started_pid)."*) ;;
+    *) fail "Status did not report the ready watcher: $status_output" ;;
+esac
 assert_equal 700 "$(stat -c '%a' "$cli_state_dir")"
 assert_equal 600 "$(stat -c '%a' "$cli_state_dir/codex_watcher.pid")"
 assert_equal 600 "$(stat -c '%a' "$cli_state_dir/codex_watcher.lock")"

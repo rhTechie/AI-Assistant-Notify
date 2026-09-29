@@ -302,9 +302,11 @@ watch_rollout_jsonl() {
 
     declare -A rollout_offset_by_file=()
     declare -A rollout_size_by_file=()
+    declare -A rollout_signature_by_file=()
     declare -A rollout_head_by_file=()
     declare -A rollout_session_by_file=()
     declare -A rollout_ignored_by_file=()
+    declare -A rollout_restored_by_file=()
     declare -A session_cwd_by_id=()
     declare -A active_turn_by_session=()
     declare -A turn_context_by_id=()
@@ -314,10 +316,17 @@ watch_rollout_jsonl() {
 
     restore_rollout_turn_state() {
         local file_path="$1"
+        local previous_offset="$2"
         local line payload_type turn_id session_id last_turn_type="" last_turn_id=""
 
         while IFS= read -r line; do
-            payload_type=$(printf '%s\n' "$line" | sed -n 's/.*"payload":{"type":"\([^"]*\)".*/\1/p')
+            case "$line" in
+                *'"payload":{"type":"task_started"'*) payload_type=task_started ;;
+                *'"payload":{"type":"turn_aborted"'*) payload_type=turn_aborted ;;
+                *'"payload":{"type":"task_complete"'*) payload_type=task_complete ;;
+                *'"payload":{"type":"task_failed"'*) payload_type=task_failed ;;
+                *) continue ;;
+            esac
             case "$payload_type" in
                 task_started)
                     turn_id=$(extract_rollout_string_field "$line" "turn_id")
@@ -344,12 +353,15 @@ watch_rollout_jsonl() {
                     fi
                     ;;
             esac
-        done < <(tail -n "$CODEX_ROLLOUT_RESTORE_TAIL_LINES" "$file_path" 2>/dev/null || true)
+        done < <(head -n "$previous_offset" "$file_path" 2>/dev/null | tail -n "$CODEX_ROLLOUT_RESTORE_TAIL_LINES" || true)
 
         if [ -z "$last_turn_type" ]; then
-            line=$(grep -E '"payload":\{"type":"(task_started|turn_aborted|task_complete|task_failed)"' "$file_path" 2>/dev/null | tail -n 1 || true)
+            line=$(head -n "$previous_offset" "$file_path" 2>/dev/null | grep -E '"payload":\{"type":"(task_started|turn_aborted|task_complete|task_failed)"' | tail -n 1 || true)
             last_turn_type=$(printf '%s\n' "$line" | sed -n 's/.*"payload":{"type":"\([^"]*\)".*/\1/p')
             last_turn_id=$(extract_rollout_string_field "$line" "turn_id")
+            if [ "$last_turn_type" = "turn_aborted" ] && is_valid_map_key "$last_turn_id"; then
+                turn_interrupted_by_id["$last_turn_id"]=1
+            fi
         fi
 
         session_id="${rollout_session_by_file[$file_path]:-}"
@@ -361,11 +373,18 @@ watch_rollout_jsonl() {
     seed_rollout_file_state() {
         local file_path="$1"
         local initial_offset="$2"
+        local initial_signature="${3:-}"
         local session_line session_id cwd
+
+        if [ -z "$initial_signature" ]; then
+            initial_signature=$(stat -c '%s:%y' "$file_path" 2>/dev/null || true)
+        fi
 
         unset "rollout_session_by_file[$file_path]"
         unset "rollout_ignored_by_file[$file_path]"
+        unset "rollout_restored_by_file[$file_path]"
         rollout_offset_by_file["$file_path"]="$initial_offset"
+        rollout_signature_by_file["$file_path"]="$initial_signature"
         rollout_size_by_file["$file_path"]="$(wc -c < "$file_path" 2>/dev/null || echo "0")"
         rollout_head_by_file["$file_path"]="$(sed -n '1p' "$file_path" 2>/dev/null || true)"
         session_id=$(rollout_session_id_from_file "$file_path")
@@ -388,9 +407,6 @@ watch_rollout_jsonl() {
             fi
         fi
 
-        if [ "$initial_offset" -gt 0 ]; then
-            restore_rollout_turn_state "$file_path"
-        fi
     }
 
     process_rollout_line() {
@@ -527,12 +543,15 @@ watch_rollout_jsonl() {
         unset "turn_interrupted_by_id[$turn_id]"
     }
 
-    local file line_count file_size current_head
+    local file line_count file_size current_head file_signature discovered
     while IFS= read -r file; do
         [ -n "$file" ] || continue
+        file_signature=$(stat -c '%s:%y' "$file" 2>/dev/null || true)
+        [ -n "$file_signature" ] || continue
         line_count=$(wc -l < "$file" 2>/dev/null || echo "0")
-        seed_rollout_file_state "$file" "$line_count"
+        seed_rollout_file_state "$file" "$line_count" "$file_signature"
     done < <(find "$sessions_dir" -type f -name 'rollout-*.jsonl' 2>/dev/null | sort)
+    append_log "$runtime_log" "codex_watcher ready pid=$$ source=rollout_jsonl"
 
     while true; do
         local files=()
@@ -540,14 +559,22 @@ watch_rollout_jsonl() {
 
         for file in "${files[@]}"; do
             [ -n "$file" ] || continue
+            discovered=0
 
             if [ -z "${rollout_offset_by_file[$file]:-}" ]; then
                 append_log "$runtime_log" "codex_watcher discovered rollout file=$file"
                 seed_rollout_file_state "$file" 0
+                discovered=1
+            fi
+
+            file_signature=$(stat -c '%s:%y' "$file" 2>/dev/null || true)
+            [ -n "$file_signature" ] || continue
+            if [ "$discovered" -eq 0 ] && [ "$file_signature" = "${rollout_signature_by_file[$file]:-}" ]; then
+                continue
             fi
 
             line_count=$(wc -l < "$file" 2>/dev/null || echo "0")
-            file_size=$(wc -c < "$file" 2>/dev/null || echo "0")
+            file_size=${file_signature%%:*}
             current_head=$(sed -n '1p' "$file" 2>/dev/null || true)
             if [ "$line_count" -lt "${rollout_offset_by_file[$file]:-0}" ] || {
                 [ -n "${rollout_size_by_file[$file]:-}" ] && \
@@ -560,6 +587,8 @@ watch_rollout_jsonl() {
                 seed_rollout_file_state "$file" 0
             fi
 
+            rollout_signature_by_file["$file"]="$file_signature"
+
             if [ "${rollout_ignored_by_file[$file]:-0}" = "1" ]; then
                 rollout_offset_by_file["$file"]="$line_count"
                 rollout_size_by_file["$file"]="$file_size"
@@ -568,8 +597,14 @@ watch_rollout_jsonl() {
             fi
 
             if [ "$line_count" -le "${rollout_offset_by_file[$file]:-0}" ]; then
+                rollout_size_by_file["$file"]="$file_size"
                 continue
             fi
+
+            if [ "${rollout_restored_by_file[$file]:-0}" != "1" ] && [ "${rollout_offset_by_file[$file]:-0}" -gt 0 ]; then
+                restore_rollout_turn_state "$file" "${rollout_offset_by_file[$file]}"
+            fi
+            rollout_restored_by_file["$file"]=1
 
             while IFS= read -r line; do
                 process_rollout_line "$file" "$line"
@@ -687,6 +722,7 @@ codex_watcher_run() {
     case "$CODEX_WATCH_SOURCE" in
         legacy_log)
             append_log "$runtime_log" "codex_watcher started source=legacy_log log=$CODEX_LOG_FILE"
+            append_log "$runtime_log" "codex_watcher ready pid=$$ source=legacy_log"
             watch_legacy_log "$notify_callback" "$runtime_log"
             ;;
         rollout_jsonl)

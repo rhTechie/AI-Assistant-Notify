@@ -258,7 +258,11 @@ status_watcher_process() {
     if is_watcher_running "$pid_file" "$marker" "$legacy_command"; then
         local pid
         pid=$(read_pid_file "$pid_file")
-        echo "${watcher_type} watcher is running (pid ${pid:-unknown})."
+        if grep -Fq "codex_watcher ready pid=$pid " "$RUNTIME_LOG"; then
+            echo "${watcher_type} watcher is running (pid ${pid:-unknown})."
+        else
+            echo "${watcher_type} watcher is initializing (pid ${pid:-unknown})."
+        fi
     else
         echo "${watcher_type} watcher is not running."
     fi
