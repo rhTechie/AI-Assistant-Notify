@@ -278,23 +278,32 @@ append_rollout_line "$SUBAGENT_ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:52:00.
 append_rollout_line "$SUBAGENT_ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:52:00.001Z","type":"session_meta","payload":{"id":"019e72b9-87cb-79b1-b8cf-534ecf01bec7","timestamp":"2026-05-29T07:51:42.098Z","cwd":"/tmp/project-rollout","originator":"codex-tui","source":"cli"}}'
 append_rollout_line "$SUBAGENT_ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:52:00.002Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-parent-inherited","started_at":1780041120}}'
 append_rollout_line "$SUBAGENT_ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:52:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-subagent","started_at":1780041121}}'
+append_rollout_line "$SUBAGENT_ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:52:01.500Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input_async","arguments":"{\"questions\":[{\"title\":\"subagent-private-question\"}]}","call_id":"call-subagent-question"}}'
 append_rollout_line "$SUBAGENT_ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:52:02.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-subagent","completed_at":1780041122}}'
 
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:53:58.199Z","type":"session_meta","payload":{"id":"019e72b9-87cb-79b1-b8cf-534ecf01bec7","timestamp":"2026-05-29T07:53:42.098Z","cwd":"/tmp/private-parent/project-rollout","originator":"codex-tui"}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:53:58.200Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-rollout-complete","started_at":1780041238}}'
+question_line='{"timestamp":"2026-05-29T07:54:00.000Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input_async","arguments":"{\"questions\":[{\"title\":\"private-question-body\"}]}","call_id":"call-question-async"}}'
+append_rollout_line "$ROLLOUT_FILE" "$question_line"
+append_rollout_line "$ROLLOUT_FILE" "$question_line"
+append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:54:00.001Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-question-async","output":"{\"accepted\":true}"}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:54:10.023Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"curl --header Authorization:Bearer-rollout-secret https://internal.example\",\"workdir\":\"/tmp/private-parent/project-rollout\",\"yield_time_ms\":1000}","call_id":"call-rollout-complete"}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:54:21.023Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-rollout-complete","completed_at":1780041261}}'
+append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:54:21.024Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{\"questions\":[{\"title\":\"after-turn-question\"}]}","call_id":"call-after-turn"}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:55:58.200Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-rollout-interrupt","started_at":1780041358}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:56:10.023Z","type":"response_item","payload":{"type":"function_call","name":"apply_patch","arguments":"*** Begin Patch\n*** End Patch","call_id":"call-rollout-interrupt"}}'
+append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:56:11.000Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{\"questions\":[{\"title\":\"second-private-question\"}]}","call_id":"call-question-sync"}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:56:12.023Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-rollout-interrupt","reason":"interrupted","completed_at":1780041372}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:56:13.023Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-rollout-interrupt","completed_at":1780041373}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:57:58.200Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-rollout-failed","started_at":1780041478}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:58:10.023Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"printenv TOP_SECRET_VALUE\",\"workdir\":\"/tmp/private-parent/project-rollout\",\"yield_time_ms\":1000}","call_id":"call-rollout-failed"}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:58:21.023Z","type":"event_msg","payload":{"type":"task_failed","turn_id":"turn-rollout-failed","error":"synthetic failure"}}'
 
-wait_for_event_count 3
+wait_for_event_count 5
 sleep 0.5
 
+assert_contains 'codex|question_requested|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-complete|Codex 向你提出了问题，请返回会话回答。 项目：project-rollout。'
+assert_contains 'codex|question_requested|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-interrupt|Codex 向你提出了问题，请返回会话回答。 项目：project-rollout。'
 assert_contains 'codex|turn_complete|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-complete|'
 assert_contains 'codex|turn_interrupted|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-interrupt|'
 assert_contains 'codex|turn_failed|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-failed|Codex 当前这一问执行失败，请查看终端中的错误信息。'
@@ -302,13 +311,17 @@ assert_contains '项目：project-rollout。 最近工具：exec_command。'
 assert_not_contains 'codex|turn_complete|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-interrupt|'
 assert_not_contains 'codex|turn_complete|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-failed|'
 assert_not_contains '|turn-subagent|'
+assert_not_contains 'subagent-private-question'
+assert_not_contains 'private-question-body'
+assert_not_contains 'second-private-question'
+assert_not_contains 'after-turn-question'
 assert_not_contains 'Bearer-rollout-secret'
 assert_not_contains 'TOP_SECRET_VALUE'
 assert_not_contains '/tmp/private-parent/project-rollout'
 
 event_count=$(wc -l < "$EVENT_LOG")
-if [ "$event_count" -ne 3 ]; then
-    echo "Expected 3 rollout watcher events, got $event_count." >&2
+if [ "$event_count" -ne 5 ]; then
+    echo "Expected 5 rollout watcher events, got $event_count." >&2
     cat "$EVENT_LOG" >&2
     exit 1
 fi
@@ -325,6 +338,14 @@ RESTART_ROLLOUT_FILE="$CODEX_SESSIONS_DIR/2026/05/29/rollout-2026-05-29T16-00-00
 append_rollout_line "$RESTART_ROLLOUT_FILE" '{"timestamp":"2026-05-29T08:00:00.000Z","type":"session_meta","payload":{"id":"019e72b9-9999-7999-8999-999999999999","timestamp":"2026-05-29T08:00:00.000Z","cwd":"/tmp/restart-project","originator":"codex-tui"}}'
 append_rollout_line "$RESTART_ROLLOUT_FILE" '{"timestamp":"2026-05-29T08:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-restart-aborted","started_at":1780041601}}'
 append_rollout_line "$RESTART_ROLLOUT_FILE" '{"timestamp":"2026-05-29T08:00:02.000Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-restart-aborted","reason":"interrupted","completed_at":1780041602}}'
+
+ACTIVE_RESTART_FILE="$CODEX_SESSIONS_DIR/2026/05/29/rollout-2026-05-29T16-00-01-019e72b9-bbbb-7bbb-8bbb-bbbbbbbbbbbb.jsonl"
+: > "$ACTIVE_RESTART_FILE"
+append_rollout_line "$ACTIVE_RESTART_FILE" '{"timestamp":"2026-05-29T08:00:00.000Z","type":"session_meta","payload":{"id":"019e72b9-bbbb-7bbb-8bbb-bbbbbbbbbbbb","cwd":"/tmp/active-project","source":"cli"}}'
+append_rollout_line "$ACTIVE_RESTART_FILE" '{"timestamp":"2026-05-29T08:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-active-before-restart"}}'
+for ((i = 0; i < 205; i++)); do
+    append_rollout_line "$ACTIVE_RESTART_FILE" '{"timestamp":"2026-05-29T08:00:02.000Z","type":"event_msg","payload":{"type":"token_count"}}'
+done
 
 (
     export CODEX_LOG_FILE
@@ -355,16 +376,21 @@ sleep 1.2
 append_rollout_line "$RESTART_ROLLOUT_FILE" '{"timestamp":"2026-05-29T08:00:03.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-restart-aborted","completed_at":1780041603}}'
 append_rollout_line "$RESTART_ROLLOUT_FILE" '{"timestamp":"2026-05-29T08:01:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-after-restart","started_at":1780041660}}'
 append_rollout_line "$RESTART_ROLLOUT_FILE" '{"timestamp":"2026-05-29T08:01:01.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-after-restart","completed_at":1780041661}}'
+append_rollout_line "$ACTIVE_RESTART_FILE" '{"timestamp":"2026-05-29T08:01:01.500Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input_async","arguments":"{\"questions\":[{\"title\":\"restart-private-question\"}]}","call_id":"call-after-restart-question"}}'
+append_rollout_line "$ACTIVE_RESTART_FILE" '{"timestamp":"2026-05-29T08:01:02.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-active-before-restart"}}'
 
-wait_for_event_count 1
+wait_for_event_count 3
 sleep 0.5
 
 assert_contains 'codex|turn_complete|019e72b9-9999-7999-8999-999999999999|turn-after-restart|'
+assert_contains 'codex|question_requested|019e72b9-bbbb-7bbb-8bbb-bbbbbbbbbbbb|turn-active-before-restart|Codex 向你提出了问题，请返回会话回答。 项目：active-project。'
+assert_contains 'codex|turn_complete|019e72b9-bbbb-7bbb-8bbb-bbbbbbbbbbbb|turn-active-before-restart|'
 assert_not_contains '|turn-restart-aborted|'
+assert_not_contains 'restart-private-question'
 
 event_count=$(wc -l < "$EVENT_LOG")
-if [ "$event_count" -ne 1 ]; then
-    echo "Expected 1 event after watcher restart, got $event_count." >&2
+if [ "$event_count" -ne 3 ]; then
+    echo "Expected 3 events after watcher restart, got $event_count." >&2
     cat "$EVENT_LOG" >&2
     exit 1
 fi

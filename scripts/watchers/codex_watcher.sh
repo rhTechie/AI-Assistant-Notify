@@ -98,6 +98,9 @@ build_turn_message() {
         turn_failed)
             message="Codex 当前这一问执行失败，请查看终端中的错误信息。"
             ;;
+        question_requested)
+            message="Codex 向你提出了问题，请返回会话回答。"
+            ;;
         *)
             message="Codex 状态发生变化。"
             ;;
@@ -281,6 +284,17 @@ emit_turn_failed() {
     "$notify_callback" "codex" "turn_failed" "$message" "$thread_id" "$turn_id"
 }
 
+emit_question_requested() {
+    local notify_callback="$1"
+    local thread_id="$2"
+    local turn_id="$3"
+    local cwd="$4"
+
+    local message
+    message=$(build_turn_message "question_requested" "$cwd" "")
+    "$notify_callback" "codex" "question_requested" "$message" "$thread_id" "$turn_id"
+}
+
 watch_rollout_jsonl() {
     local notify_callback="$1"
     local runtime_log="$2"
@@ -296,10 +310,11 @@ watch_rollout_jsonl() {
     declare -A turn_context_by_id=()
     declare -A turn_cwd_by_id=()
     declare -A turn_interrupted_by_id=()
+    declare -A notified_question_by_call=()
 
-    restore_rollout_terminal_state() {
+    restore_rollout_turn_state() {
         local file_path="$1"
-        local line payload_type turn_id
+        local line payload_type turn_id session_id last_turn_type="" last_turn_id=""
 
         while IFS= read -r line; do
             payload_type=$(printf '%s\n' "$line" | sed -n 's/.*"payload":{"type":"\([^"]*\)".*/\1/p')
@@ -308,22 +323,39 @@ watch_rollout_jsonl() {
                     turn_id=$(extract_rollout_string_field "$line" "turn_id")
                     if is_valid_map_key "$turn_id"; then
                         turn_interrupted_by_id["$turn_id"]=0
+                        last_turn_type="$payload_type"
+                        last_turn_id="$turn_id"
                     fi
                     ;;
                 turn_aborted)
                     turn_id=$(extract_rollout_string_field "$line" "turn_id")
                     if is_valid_map_key "$turn_id"; then
                         turn_interrupted_by_id["$turn_id"]=1
+                        last_turn_type="$payload_type"
+                        last_turn_id="$turn_id"
                     fi
                     ;;
                 task_complete|task_failed)
                     turn_id=$(extract_rollout_string_field "$line" "turn_id")
                     if is_valid_map_key "$turn_id"; then
                         unset "turn_interrupted_by_id[$turn_id]"
+                        last_turn_type="$payload_type"
+                        last_turn_id="$turn_id"
                     fi
                     ;;
             esac
         done < <(tail -n "$CODEX_ROLLOUT_RESTORE_TAIL_LINES" "$file_path" 2>/dev/null || true)
+
+        if [ -z "$last_turn_type" ]; then
+            line=$(grep -E '"payload":\{"type":"(task_started|turn_aborted|task_complete|task_failed)"' "$file_path" 2>/dev/null | tail -n 1 || true)
+            last_turn_type=$(printf '%s\n' "$line" | sed -n 's/.*"payload":{"type":"\([^"]*\)".*/\1/p')
+            last_turn_id=$(extract_rollout_string_field "$line" "turn_id")
+        fi
+
+        session_id="${rollout_session_by_file[$file_path]:-}"
+        if [ "$last_turn_type" = "task_started" ] && is_valid_map_key "$session_id" && is_valid_map_key "$last_turn_id"; then
+            active_turn_by_session["$session_id"]="$last_turn_id"
+        fi
     }
 
     seed_rollout_file_state() {
@@ -357,14 +389,14 @@ watch_rollout_jsonl() {
         fi
 
         if [ "$initial_offset" -gt 0 ]; then
-            restore_rollout_terminal_state "$file_path"
+            restore_rollout_turn_state "$file_path"
         fi
     }
 
     process_rollout_line() {
         local file_path="$1"
         local line="$2"
-        local session_id payload_type turn_id cwd
+        local session_id payload_type turn_id cwd tool_name call_id
 
         if [ "${rollout_ignored_by_file[$file_path]:-0}" = "1" ]; then
             return
@@ -405,13 +437,29 @@ watch_rollout_jsonl() {
             return
         fi
 
-        if [ "$payload_type" = "function_call" ]; then
+        if [ "$payload_type" = "function_call" ] || [ "$payload_type" = "custom_tool_call" ]; then
             turn_id="${active_turn_by_session[$session_id]:-}"
             if ! is_valid_map_key "$turn_id"; then
                 return
             fi
 
-            if printf '%s\n' "$line" | grep -q '"name":"exec_command"'; then
+            tool_name=$(extract_rollout_string_field "$line" "name")
+            case "$tool_name" in
+                request_user_input|request_user_input_async)
+                    call_id=$(extract_rollout_string_field "$line" "call_id")
+                    if is_valid_map_key "$call_id" && [ -z "${notified_question_by_call[$call_id]:-}" ]; then
+                        notified_question_by_call["$call_id"]=1
+                        emit_question_requested \
+                            "$notify_callback" \
+                            "$session_id" \
+                            "$turn_id" \
+                            "${turn_cwd_by_id[$turn_id]:-${session_cwd_by_id[$session_id]:-}}"
+                    fi
+                    return
+                    ;;
+            esac
+
+            if [ "$tool_name" = "exec_command" ]; then
                 turn_context_by_id["$turn_id"]="exec_command"
 
                 cwd=$(extract_rollout_string_field "$line" "workdir")
@@ -421,7 +469,7 @@ watch_rollout_jsonl() {
                 return
             fi
 
-            if printf '%s\n' "$line" | grep -q '"name":"apply_patch"'; then
+            if [ "$tool_name" = "apply_patch" ]; then
                 turn_context_by_id["$turn_id"]="apply_patch"
             fi
             return
