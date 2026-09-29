@@ -289,7 +289,6 @@ append_rollout_line "$ROLLOUT_FILE" "$question_line"
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:54:00.001Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-question-async","output":"{\"accepted\":true}"}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:54:10.023Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"curl --header Authorization:Bearer-rollout-secret https://internal.example\",\"workdir\":\"/tmp/private-parent/project-rollout\",\"yield_time_ms\":1000}","call_id":"call-rollout-complete"}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:54:21.023Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-rollout-complete","completed_at":1780041261}}'
-append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:54:21.024Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{\"questions\":[{\"title\":\"after-turn-question\"}]}","call_id":"call-after-turn"}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:55:58.200Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-rollout-interrupt","started_at":1780041358}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:56:10.023Z","type":"response_item","payload":{"type":"function_call","name":"apply_patch","arguments":"*** Begin Patch\n*** End Patch","call_id":"call-rollout-interrupt"}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:56:11.000Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{\"questions\":[{\"title\":\"second-private-question\"}]}","call_id":"call-question-sync"}}'
@@ -302,8 +301,8 @@ append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:58:21.023Z","ty
 wait_for_event_count 5
 sleep 0.5
 
-assert_contains 'codex|question_requested|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-complete|Codex 向你提出了问题，请返回会话回答。 项目：project-rollout。'
-assert_contains 'codex|question_requested|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-interrupt|Codex 向你提出了问题，请返回会话回答。 项目：project-rollout。'
+assert_contains 'codex|question_requested|019e72b9-87cb-79b1-b8cf-534ecf01bec7|call-question-async|Codex 向你提出了问题，请返回会话回答。 项目：project-rollout。'
+assert_contains 'codex|question_requested|019e72b9-87cb-79b1-b8cf-534ecf01bec7|call-question-sync|Codex 向你提出了问题，请返回会话回答。 项目：project-rollout。'
 assert_contains 'codex|turn_complete|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-complete|'
 assert_contains 'codex|turn_interrupted|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-interrupt|'
 assert_contains 'codex|turn_failed|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-failed|Codex 当前这一问执行失败，请查看终端中的错误信息。'
@@ -314,7 +313,6 @@ assert_not_contains '|turn-subagent|'
 assert_not_contains 'subagent-private-question'
 assert_not_contains 'private-question-body'
 assert_not_contains 'second-private-question'
-assert_not_contains 'after-turn-question'
 assert_not_contains 'Bearer-rollout-secret'
 assert_not_contains 'TOP_SECRET_VALUE'
 assert_not_contains '/tmp/private-parent/project-rollout'
@@ -383,7 +381,7 @@ wait_for_event_count 3
 sleep 0.5
 
 assert_contains 'codex|turn_complete|019e72b9-9999-7999-8999-999999999999|turn-after-restart|'
-assert_contains 'codex|question_requested|019e72b9-bbbb-7bbb-8bbb-bbbbbbbbbbbb|turn-active-before-restart|Codex 向你提出了问题，请返回会话回答。 项目：active-project。'
+assert_contains 'codex|question_requested|019e72b9-bbbb-7bbb-8bbb-bbbbbbbbbbbb|call-after-restart-question|Codex 向你提出了问题，请返回会话回答。 项目：active-project。'
 assert_contains 'codex|turn_complete|019e72b9-bbbb-7bbb-8bbb-bbbbbbbbbbbb|turn-active-before-restart|'
 assert_not_contains '|turn-restart-aborted|'
 assert_not_contains 'restart-private-question'

@@ -287,12 +287,12 @@ emit_turn_failed() {
 emit_question_requested() {
     local notify_callback="$1"
     local thread_id="$2"
-    local turn_id="$3"
+    local call_id="$3"
     local cwd="$4"
 
     local message
     message=$(build_turn_message "question_requested" "$cwd" "")
-    "$notify_callback" "codex" "question_requested" "$message" "$thread_id" "$turn_id"
+    "$notify_callback" "codex" "question_requested" "$message" "$thread_id" "$call_id"
 }
 
 watch_rollout_jsonl() {
@@ -314,10 +314,10 @@ watch_rollout_jsonl() {
     declare -A turn_interrupted_by_id=()
     declare -A notified_question_by_call=()
 
-    restore_rollout_turn_state() {
+    restore_rollout_terminal_state() {
         local file_path="$1"
         local previous_offset="$2"
-        local line payload_type turn_id session_id last_turn_type="" last_turn_id=""
+        local line payload_type turn_id
 
         while IFS= read -r line; do
             case "$line" in
@@ -332,42 +332,22 @@ watch_rollout_jsonl() {
                     turn_id=$(extract_rollout_string_field "$line" "turn_id")
                     if is_valid_map_key "$turn_id"; then
                         turn_interrupted_by_id["$turn_id"]=0
-                        last_turn_type="$payload_type"
-                        last_turn_id="$turn_id"
                     fi
                     ;;
                 turn_aborted)
                     turn_id=$(extract_rollout_string_field "$line" "turn_id")
                     if is_valid_map_key "$turn_id"; then
                         turn_interrupted_by_id["$turn_id"]=1
-                        last_turn_type="$payload_type"
-                        last_turn_id="$turn_id"
                     fi
                     ;;
                 task_complete|task_failed)
                     turn_id=$(extract_rollout_string_field "$line" "turn_id")
                     if is_valid_map_key "$turn_id"; then
                         unset "turn_interrupted_by_id[$turn_id]"
-                        last_turn_type="$payload_type"
-                        last_turn_id="$turn_id"
                     fi
                     ;;
             esac
         done < <(head -n "$previous_offset" "$file_path" 2>/dev/null | tail -n "$CODEX_ROLLOUT_RESTORE_TAIL_LINES" || true)
-
-        if [ -z "$last_turn_type" ]; then
-            line=$(head -n "$previous_offset" "$file_path" 2>/dev/null | grep -E '"payload":\{"type":"(task_started|turn_aborted|task_complete|task_failed)"' | tail -n 1 || true)
-            last_turn_type=$(printf '%s\n' "$line" | sed -n 's/.*"payload":{"type":"\([^"]*\)".*/\1/p')
-            last_turn_id=$(extract_rollout_string_field "$line" "turn_id")
-            if [ "$last_turn_type" = "turn_aborted" ] && is_valid_map_key "$last_turn_id"; then
-                turn_interrupted_by_id["$last_turn_id"]=1
-            fi
-        fi
-
-        session_id="${rollout_session_by_file[$file_path]:-}"
-        if [ "$last_turn_type" = "task_started" ] && is_valid_map_key "$session_id" && is_valid_map_key "$last_turn_id"; then
-            active_turn_by_session["$session_id"]="$last_turn_id"
-        fi
     }
 
     seed_rollout_file_state() {
@@ -454,26 +434,26 @@ watch_rollout_jsonl() {
         fi
 
         if [ "$payload_type" = "function_call" ] || [ "$payload_type" = "custom_tool_call" ]; then
-            turn_id="${active_turn_by_session[$session_id]:-}"
-            if ! is_valid_map_key "$turn_id"; then
-                return
-            fi
-
             tool_name=$(extract_rollout_string_field "$line" "name")
             case "$tool_name" in
                 request_user_input|request_user_input_async)
                     call_id=$(extract_rollout_string_field "$line" "call_id")
-                    if is_valid_map_key "$call_id" && [ -z "${notified_question_by_call[$call_id]:-}" ]; then
+                    if is_valid_map_key "$session_id" && is_valid_map_key "$call_id" && [ -z "${notified_question_by_call[$call_id]:-}" ]; then
                         notified_question_by_call["$call_id"]=1
                         emit_question_requested \
                             "$notify_callback" \
                             "$session_id" \
-                            "$turn_id" \
-                            "${turn_cwd_by_id[$turn_id]:-${session_cwd_by_id[$session_id]:-}}"
+                            "$call_id" \
+                            "${session_cwd_by_id[$session_id]:-}"
                     fi
                     return
                     ;;
             esac
+
+            turn_id="${active_turn_by_session[$session_id]:-}"
+            if ! is_valid_map_key "$turn_id"; then
+                return
+            fi
 
             if [ "$tool_name" = "exec_command" ]; then
                 turn_context_by_id["$turn_id"]="exec_command"
@@ -602,7 +582,7 @@ watch_rollout_jsonl() {
             fi
 
             if [ "${rollout_restored_by_file[$file]:-0}" != "1" ] && [ "${rollout_offset_by_file[$file]:-0}" -gt 0 ]; then
-                restore_rollout_turn_state "$file" "${rollout_offset_by_file[$file]}"
+                restore_rollout_terminal_state "$file" "${rollout_offset_by_file[$file]}"
             fi
             rollout_restored_by_file["$file"]=1
 
