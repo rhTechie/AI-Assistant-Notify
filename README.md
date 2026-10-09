@@ -19,6 +19,7 @@
 - 本机可运行 `bash`
 - 本机可运行 `curl`
 - 本机可运行 `flock`
+- 本机可运行 `jq`（Codex 升级后的动态兼容性检查需要）
 - 已经安装并在使用 Codex
 
 ## 获取仓库
@@ -75,15 +76,15 @@ FEISHU_NOTIFY_RETRY_BACKOFF_SECONDS=1
 ./bin/ai-assistant-notify status
 ```
 
-`status` 会额外显示当前 watcher 实际使用的数据源，例如 `legacy_log` 或 `rollout_jsonl`。
-同时会显示几条版本信息：
+`Codex` 一行显示本机版本和当前数据源，例如 `Codex: 0.162.0 (rollout_jsonl)`。
+`Core events` 表示核心事件格式的检查结果：
 
-- `Codex installed`：当前本机已安装版本
-- `Codex verified`：当前工具已验证通过的版本上限
-- `Codex latest`：当前检测到的可升级最新版本
-- `Compatibility`：当前已安装版本是否还在已验证范围内
+- `verified`：版本在项目已验证范围内
+- `recognized`：从当前版本的主会话中识别出同一轮的开始和结束事件
+- `unconfirmed`：缺少足够的匹配记录，或事件格式尚无法识别
+- `unavailable`：缺少版本、数据源或 `jq`，无法检查
 
-如果 `Compatibility` 显示为 `recheck needed`，说明当前已安装版本已经高于脚本已验证范围，最好重新做一次兼容性检查，并在确认无回归后同步更新仓库里的已验证版本上限。
+`recognized` 只表示核心事件格式可被识别，不代表所有通知场景都经过回归测试。Codex 更新后无需手动调整已验证版本上限；若事件格式变化，仍需更新 watcher 的解析逻辑。
 
 ### 6. 停止监测
 
@@ -125,7 +126,7 @@ chmod +x ./scripts/test.sh ./scripts/test_process_utils.sh ./scripts/test_notify
 - Codex 是否已经产生本地会话数据
 - 若是旧版本 Codex，检查 `~/.codex/log/codex-tui.log` 是否存在
 - 若是新版本 Codex，检查 `~/.codex/sessions/` 下是否已有 `rollout-*.jsonl`
-- `status` 是否提示当前 Codex 版本已经高于脚本已验证版本
+- `status` 的 `Core events` 是否为 `unconfirmed` 或 `unavailable`
 - watcher 是否已经启动
 - 运行日志里是否出现 `notification sent watcher=codex type=turn_complete`
 - 若 `test-notify` 成功但真实对话没有通知，优先检查运行日志

@@ -154,25 +154,82 @@ trap cleanup EXIT
         exit 1
     fi
 
-    CODEX_WATCHER_VERIFIED_MAX_VERSION=0.200.0
-    if [ "$(codex_compatibility_status "0.199.9")" != "ok" ]; then
-        echo "Expected compatibility override to mark 0.199.9 as ok." >&2
-        exit 1
-    fi
-
-    if [ "$(codex_compatibility_status "0.200.1")" != "recheck needed" ]; then
-        echo "Expected compatibility override to mark 0.200.1 as recheck needed." >&2
-        exit 1
-    fi
-
     CODEX_WATCHER_VERIFIED_MAX_VERSION=0.158.0
     if [ "$(codex_compatibility_status "0.158.0")" != "ok" ]; then
         echo "Expected compatibility status for 0.158.0 to be ok." >&2
         exit 1
     fi
 
+    compatibility_sessions="$TMP_DIR/compatibility-sessions"
+    compatibility_rollout="$compatibility_sessions/2026/10/09/rollout-2026-10-09T12-00-00-019e72b9-cccc-7ccc-8ccc-cccccccccccc.jsonl"
+    mkdir -p "$(dirname "$compatibility_rollout")"
+    CODEX_SESSIONS_DIR="$compatibility_sessions"
+    CODEX_WATCH_SOURCE=rollout_jsonl
+
     if [ "$(codex_compatibility_status "0.158.1")" != "recheck needed" ]; then
-        echo "Expected compatibility status for 0.158.1 to require recheck." >&2
+        echo "Expected a newer version without rollout evidence to require recheck." >&2
+        exit 1
+    fi
+
+    printf '%s\n' \
+        '{"timestamp":"2026-10-09T04:00:00.000Z","type":"session_meta","payload":{"session_id":"019e72b9-cccc-7ccc-8ccc-cccccccccccc","cli_version":"0.162.0","cwd":"/tmp/compatibility-project","source":"cli"}}' \
+        '{"timestamp":"2026-10-09T04:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-compatible"}}' \
+        '{"timestamp":"2026-10-09T04:00:02.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-compatible"}}' > "$compatibility_rollout"
+
+    if [ "$(codex_compatibility_status "0.162.0")" != "event format observed" ]; then
+        echo "Expected a matching newer-version session with a complete turn to show observed event format." >&2
+        exit 1
+    fi
+
+    if [ "$(codex_compatibility_status "0.163.0")" != "recheck needed" ]; then
+        echo "Expected another installed version to require its own matching session." >&2
+        exit 1
+    fi
+
+    printf '%s\n' \
+        '{"timestamp":"2026-10-09T04:00:00.000Z","type":"session_meta","payload":{"session_id":"019e72b9-cccc-7ccc-8ccc-cccccccccccc","cli_version":"0.162.0","cwd":"/tmp/compatibility-project","source":"cli"}}' \
+        '{"timestamp":"2026-10-09T04:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-one"}}' \
+        '{"timestamp":"2026-10-09T04:00:02.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-two"}}' > "$compatibility_rollout"
+
+    if [ "$(codex_compatibility_status "0.162.0")" != "recheck needed" ]; then
+        echo "Expected unrelated start and completion events to require recheck." >&2
+        exit 1
+    fi
+
+    printf '%s\n' \
+        '{"timestamp":"2026-10-09T04:00:00.000Z","type":"session_meta","payload":{"session_id":"019e72b9-cccc-7ccc-8ccc-cccccccccccc","cli_version":"0.162.0","cwd":"/tmp/compatibility-project","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent","depth":1}}}}}' \
+        '{"timestamp":"2026-10-09T04:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-subagent"}}' \
+        '{"timestamp":"2026-10-09T04:00:02.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-subagent"}}' > "$compatibility_rollout"
+
+    if [ "$(codex_compatibility_status "0.162.0")" != "recheck needed" ]; then
+        echo "Expected subagent events alone to require recheck." >&2
+        exit 1
+    fi
+
+    printf '%s\n' \
+        '{"timestamp":"2026-10-09T04:00:00.000Z","type":"session_meta","payload":{"session_id":"019e72b9-cccc-7ccc-8ccc-cccccccccccc","cli_version":"0.162.0","cwd":"/tmp/compatibility-project","source":"cli"}}' \
+        '{"timestamp":"2026-10-09T04:00:01.000Z","type":"event_msg","payload":{"event":"task_started","turn_id":"turn-incompatible"}}' \
+        '{"timestamp":"2026-10-09T04:00:02.000Z","type":"event_msg","payload":{"event":"task_complete","turn_id":"turn-incompatible"}}' > "$compatibility_rollout"
+
+    if [ "$(codex_compatibility_status "0.162.0")" != "recheck needed" ]; then
+        echo "Expected changed event schema to require recheck." >&2
+        exit 1
+    fi
+
+    printf '%s\n' \
+        '{"timestamp":"2026-10-09T04:00:00.000Z","type":"session_meta","payload":{"session_id":"019e72b9-cccc-7ccc-8ccc-cccccccccccc","cli_version":"0.162.0","cwd":"/tmp/compatibility-project","source":"cli"}}' \
+        '{"timestamp":"2026-10-09T04:00:01.000Z","type":"event_msg","payload":{"type":"work_started","turn_id":"turn-new-schema"}}' \
+        '{"timestamp":"2026-10-09T04:00:02.000Z","type":"event_msg","payload":{"type":"work_complete","turn_id":"turn-new-schema"}}' > "$compatibility_rollout"
+
+    if [ "$(codex_compatibility_status "0.162.0")" != "recheck needed" ]; then
+        echo "Expected unrecognized event names to require recheck." >&2
+        exit 1
+    fi
+
+    CODEX_SESSIONS_DIR="$TMP_DIR/no-rollout-sessions"
+    CODEX_LOG_FILE="$dual_source_log"
+    if [ "$(codex_compatibility_status "0.162.0")" != "unknown" ]; then
+        echo "Expected legacy logs without versioned rollout evidence to have unknown compatibility." >&2
         exit 1
     fi
 )
@@ -244,8 +301,10 @@ mkdir -p "$CODEX_SESSIONS_DIR/2026/05/29"
 rm -f "$CODEX_LOG_FILE"
 
 SUBAGENT_ROLLOUT_FILE="$CODEX_SESSIONS_DIR/2026/05/29/rollout-2026-05-29T15-52-00-019e72b9-1111-7111-8111-111111111111.jsonl"
+SUBAGENT_VSCODE_ROLLOUT_FILE="$CODEX_SESSIONS_DIR/2026/05/29/rollout-2026-05-29T15-52-01-019e72b9-2222-7222-8222-222222222222.jsonl"
 ROLLOUT_FILE="$CODEX_SESSIONS_DIR/2026/05/29/rollout-2026-05-29T15-53-42-019e72b9-87cb-79b1-b8cf-534ecf01bec7.jsonl"
 : > "$SUBAGENT_ROLLOUT_FILE"
+: > "$SUBAGENT_VSCODE_ROLLOUT_FILE"
 : > "$ROLLOUT_FILE"
 
 (
@@ -281,6 +340,10 @@ append_rollout_line "$SUBAGENT_ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:52:01.
 append_rollout_line "$SUBAGENT_ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:52:01.500Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input_async","arguments":"{\"questions\":[{\"title\":\"subagent-private-question\"}]}","call_id":"call-subagent-question"}}'
 append_rollout_line "$SUBAGENT_ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:52:02.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-subagent","completed_at":1780041122}}'
 
+append_rollout_line "$SUBAGENT_VSCODE_ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:52:03.000Z","type":"session_meta","payload":{"session_id":"019e72b9-2222-7222-8222-222222222222","cli_version":"0.162.0","cwd":"/tmp/project-rollout","source":"vscode","thread_source":"subagent"}}'
+append_rollout_line "$SUBAGENT_VSCODE_ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:52:04.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-vscode-subagent"}}'
+append_rollout_line "$SUBAGENT_VSCODE_ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:52:05.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-vscode-subagent"}}'
+
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:53:58.199Z","type":"session_meta","payload":{"id":"019e72b9-87cb-79b1-b8cf-534ecf01bec7","timestamp":"2026-05-29T07:53:42.098Z","cwd":"/tmp/private-parent/project-rollout","originator":"codex-tui"}}'
 append_rollout_line "$ROLLOUT_FILE" '{"timestamp":"2026-05-29T07:53:58.200Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-rollout-complete","started_at":1780041238}}'
 question_line='{"timestamp":"2026-05-29T07:54:00.000Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input_async","arguments":"{\"questions\":[{\"title\":\"private-question-body\"}]}","call_id":"call-question-async"}}'
@@ -310,6 +373,7 @@ assert_contains '项目：project-rollout。 最近工具：exec_command。'
 assert_not_contains 'codex|turn_complete|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-interrupt|'
 assert_not_contains 'codex|turn_complete|019e72b9-87cb-79b1-b8cf-534ecf01bec7|turn-rollout-failed|'
 assert_not_contains '|turn-subagent|'
+assert_not_contains '|turn-vscode-subagent|'
 assert_not_contains 'subagent-private-question'
 assert_not_contains 'private-question-body'
 assert_not_contains 'second-private-question'

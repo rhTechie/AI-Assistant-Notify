@@ -145,7 +145,7 @@ extract_rollout_string_field() {
 is_rollout_subagent_session_line() {
     local line="$1"
 
-    printf '%s\n' "$line" | grep -Eq '"source"[[:space:]]*:[[:space:]]*\{[[:space:]]*"subagent"[[:space:]]*:'
+    printf '%s\n' "$line" | grep -Eq '"source"[[:space:]]*:[[:space:]]*\{[[:space:]]*"subagent"[[:space:]]*:|"thread_source"[[:space:]]*:[[:space:]]*"subagent"'
 }
 
 resolve_codex_watch_source() {
@@ -223,6 +223,49 @@ version_gt() {
     [ "$(version_to_sort_key "$left")" \> "$(version_to_sort_key "$right")" ]
 }
 
+codex_rollout_event_format_observed() {
+    local installed_version="$1"
+    local file
+
+    while IFS= read -r file; do
+        [ -n "$file" ] || continue
+
+        # Only a main session created by the installed CLI can describe its output format.
+        if ! head -n 1 "$file" | jq -Re --arg version "$installed_version" '
+            fromjson?
+            | select(.type == "session_meta" and .payload.cli_version == $version)
+            | select((.payload.thread_source // "") != "subagent")
+            | select((.payload.source.subagent? // null) == null)
+        ' >/dev/null 2>&1; then
+            continue
+        fi
+
+        # Check the compact payload prefix used by the live watcher, then parse
+        # turn IDs as JSON so unrelated text cannot count as a matching event.
+        if grep -E '"payload":\{"type":"(task_started|task_complete|task_failed|turn_aborted)"' "$file" 2>/dev/null |
+            jq -Rr '
+                . as $raw | (fromjson?) as $event
+                | select($event.type == "event_msg")
+                | $event.payload.type as $kind
+                | select($kind == "task_started" or $kind == "task_complete" or $kind == "task_failed" or $kind == "turn_aborted")
+                | select($raw | contains("\"payload\":{\"type\":\"" + $kind + "\""))
+                | $event.payload.turn_id
+                | select(type == "string" and length > 0 and (contains("]") | not))
+                | [$kind, .] | @tsv
+            ' 2>/dev/null |
+            awk -F '\t' '
+                $1 == "task_started" { started[$2] = 1 }
+                ($1 == "task_complete" || $1 == "task_failed" || $1 == "turn_aborted") && started[$2] { found = 1 }
+                END { exit !found }
+            '; then
+            return 0
+        fi
+    done < <(find "$CODEX_SESSIONS_DIR" -type f -name 'rollout-*.jsonl' -printf '%T@ %p\n' 2>/dev/null |
+        sort -nr | head -n 50 | sed 's/^[^ ]* //')
+
+    return 1
+}
+
 codex_compatibility_status() {
     local installed_version="$1"
 
@@ -231,12 +274,26 @@ codex_compatibility_status() {
         return
     fi
 
-    if version_gt "$installed_version" "$CODEX_WATCHER_VERIFIED_MAX_VERSION"; then
-        printf 'recheck needed'
+    if ! version_gt "$installed_version" "$CODEX_WATCHER_VERIFIED_MAX_VERSION"; then
+        printf 'ok'
         return
     fi
 
-    printf 'ok'
+    if ! command -v jq >/dev/null 2>&1 || ! resolve_codex_watch_source; then
+        printf 'unknown'
+        return
+    fi
+
+    if [ "$CODEX_WATCH_SOURCE" != "rollout_jsonl" ]; then
+        printf 'unknown'
+        return
+    fi
+
+    if codex_rollout_event_format_observed "$installed_version"; then
+        printf 'event format observed'
+    else
+        printf 'recheck needed'
+    fi
 }
 
 codex_watcher_init() {

@@ -247,8 +247,9 @@ status_watcher_process() {
     local pid_file="$STATE_DIR/${watcher_type}_watcher.pid"
     local watcher_script="$SCRIPT_DIR/watchers/${watcher_type}_watcher.sh"
     local installed_version=""
-    local latest_version=""
     local compatibility_status=""
+    local event_status=""
+    local source_name="unknown"
     local marker
     local legacy_command
 
@@ -271,16 +272,18 @@ status_watcher_process() {
         # shellcheck disable=SC1090
         source "$watcher_script"
         installed_version=$(codex_installed_version_detect 2>/dev/null || true)
-        latest_version=$(codex_latest_version_detect 2>/dev/null || true)
-        compatibility_status=$(codex_compatibility_status "$installed_version")
-
         if codex_watcher_init >/dev/null 2>&1; then
-            echo "Codex source: ${CODEX_WATCH_SOURCE:-unknown}"
+            source_name="${CODEX_WATCH_SOURCE:-unknown}"
         fi
-        echo "Codex installed: ${installed_version:-unknown}"
-        echo "Codex verified: ${CODEX_WATCHER_VERIFIED_MAX_VERSION:-unknown}"
-        echo "Codex latest: ${latest_version:-unknown}"
-        echo "Compatibility: ${compatibility_status:-unknown}"
+        compatibility_status=$(codex_compatibility_status "$installed_version")
+        case "$compatibility_status" in
+            ok) event_status="verified" ;;
+            'event format observed') event_status="recognized" ;;
+            'recheck needed') event_status="unconfirmed" ;;
+            *) event_status="unavailable" ;;
+        esac
+        echo "Codex: ${installed_version:-unknown} ($source_name)"
+        echo "Core events: $event_status"
     fi
 }
 
