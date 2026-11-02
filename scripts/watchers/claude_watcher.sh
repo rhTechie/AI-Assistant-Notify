@@ -440,6 +440,15 @@ watch_projects_jsonl() {
         local files=()
         mapfile -t files < <(claude_main_session_files)
 
+        local -A file_signatures=()
+        if [ "${#files[@]}" -gt 0 ]; then
+            # NUL delimiters preserve paths; xargs splits batches at the argument limit.
+            while IFS= read -r -d '' file && IFS= read -r -d '' file_signature; do
+                file_signatures["$file"]="$file_signature"
+            done < <(printf '%s\0' "${files[@]}" |
+                xargs -0 -r stat --printf '%n\0%s:%y\0' -- 2>/dev/null || true)
+        fi
+
         for known_file in "${!claude_offset_by_file[@]}"; do
             if [ ! -f "$known_file" ]; then
                 append_log "$runtime_log" "claude_watcher remove missing file=$known_file"
@@ -464,7 +473,7 @@ watch_projects_jsonl() {
                 discovered=1
             fi
 
-            file_signature=$(stat -c '%s:%y' "$file" 2>/dev/null || true)
+            file_signature="${file_signatures[$file]:-}"
             [ -n "$file_signature" ] || continue
             if [ "$discovered" -eq 0 ] && [ "$file_signature" = "${claude_signature_by_file[$file]:-}" ]; then
                 continue
