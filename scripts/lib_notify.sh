@@ -70,6 +70,7 @@ send_feishu_notification() {
     local watcher_type="$1"
     local message="$2"
     local webhook=""
+    local webhook_var=""
     local keyword=""
     local connect_timeout="${FEISHU_NOTIFY_CONNECT_TIMEOUT_SECONDS:-5}"
     local max_time="${FEISHU_NOTIFY_MAX_TIME_SECONDS:-15}"
@@ -79,7 +80,13 @@ send_feishu_notification() {
     case "$watcher_type" in
         codex)
             webhook="${CODEX_FEISHU_WEBHOOK:-}"
+            webhook_var="CODEX_FEISHU_WEBHOOK"
             keyword="${CODEX_FEISHU_KEYWORD:-Codex提醒}"
+            ;;
+        claude)
+            webhook="${CLAUDE_FEISHU_WEBHOOK:-}"
+            webhook_var="CLAUDE_FEISHU_WEBHOOK"
+            keyword="${CLAUDE_FEISHU_KEYWORD:-Claude提醒}"
             ;;
         *)
             echo "Error: unsupported watcher type: $watcher_type" >&2
@@ -88,7 +95,7 @@ send_feishu_notification() {
     esac
 
     if [ -z "$webhook" ]; then
-        echo "Error: CODEX_FEISHU_WEBHOOK is required." >&2
+        echo "Error: ${webhook_var} is required." >&2
         return 1
     fi
 
@@ -216,12 +223,14 @@ Usage:
   lib_notify.sh <watcher_type> <message>
 
 Arguments:
-  watcher_type    codex
+  watcher_type    codex | claude
   message         Notification message
 
 Environment:
   CODEX_FEISHU_WEBHOOK    Feishu webhook for Codex notifications
   CODEX_FEISHU_KEYWORD    Keyword for Codex notifications (default: Codex提醒)
+  CLAUDE_FEISHU_WEBHOOK   Feishu webhook for Claude notifications
+  CLAUDE_FEISHU_KEYWORD   Keyword for Claude notifications (default: Claude提醒)
   FEISHU_NOTIFY_CONNECT_TIMEOUT_SECONDS  Connect timeout (default: 5)
   FEISHU_NOTIFY_MAX_TIME_SECONDS         Total request timeout (default: 15)
   FEISHU_NOTIFY_MAX_ATTEMPTS             Maximum attempts (default: 3)

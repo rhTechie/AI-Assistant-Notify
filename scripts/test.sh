@@ -9,8 +9,10 @@ bash -n \
     "$REPO_ROOT/bin/ai-assistant-notify" \
     "$REPO_ROOT/scripts/"*.sh \
     "$REPO_ROOT/scripts/watchers/codex_watcher.sh" \
+    "$REPO_ROOT/scripts/watchers/claude_watcher.sh" \
     "$REPO_ROOT/scripts/utils/"*.sh
 
 bash "$REPO_ROOT/scripts/test_process_utils.sh"
 bash "$REPO_ROOT/scripts/test_notify.sh"
 bash "$REPO_ROOT/scripts/test_codex_watcher.sh"
+bash "$REPO_ROOT/scripts/test_claude_watcher.sh"

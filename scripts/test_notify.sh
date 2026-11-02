@@ -64,6 +64,8 @@ assert_file_not_contains() {
 reset_config() {
     export CODEX_FEISHU_WEBHOOK="https://mock.invalid/webhook"
     export CODEX_FEISHU_KEYWORD="CodexTest"
+    export CLAUDE_FEISHU_WEBHOOK="https://mock.invalid/claude-webhook"
+    unset CLAUDE_FEISHU_KEYWORD
     export FEISHU_NOTIFY_CONNECT_TIMEOUT_SECONDS=5
     export FEISHU_NOTIFY_MAX_TIME_SECONDS=15
     export FEISHU_NOTIFY_MAX_ATTEMPTS=3
@@ -145,7 +147,9 @@ sleep() {
 }
 
 run_notification() {
-    if send_feishu_notification codex "mock notification" >"$STDOUT_FILE" 2>"$STDERR_FILE"; then
+    local watcher_type="${1:-codex}"
+
+    if send_feishu_notification "$watcher_type" "mock notification" >"$STDOUT_FILE" 2>"$STDERR_FILE"; then
         LAST_RC=0
     else
         LAST_RC=$?
@@ -322,6 +326,32 @@ test_invalid_retry_config_fails_before_curl() {
     assert_file_contains 'FEISHU_NOTIFY_MAX_ATTEMPTS must be a positive integer' "$STDERR_FILE"
 }
 
+test_claude_uses_webhook_and_default_keyword() {
+    reset_config
+    set_mock_responses '0|200|{"code":0}|'
+
+    run_notification claude
+
+    assert_equals 0 "$LAST_RC" "claude notification return code"
+    assert_call_count 1 "claude notification call count"
+    assert_file_contains 'ARG=https://mock.invalid/claude-webhook' "$MOCK_ARGS_LOG"
+    assert_file_contains 'Claude提醒' "$MOCK_PAYLOAD_FILE"
+    assert_file_contains 'mock notification' "$MOCK_PAYLOAD_FILE"
+    assert_file_not_contains 'CodexTest' "$MOCK_PAYLOAD_FILE"
+}
+
+test_claude_requires_its_own_webhook() {
+    reset_config
+    unset CLAUDE_FEISHU_WEBHOOK
+    set_mock_responses '0|200|{"code":0}|'
+
+    run_notification claude
+
+    assert_equals 1 "$LAST_RC" "missing claude webhook return code"
+    assert_call_count 0 "missing claude webhook call count"
+    assert_file_contains 'CLAUDE_FEISHU_WEBHOOK' "$STDERR_FILE"
+}
+
 test_success_uses_default_timeouts
 test_timeout_overrides_are_forwarded
 test_curl_error_preserves_status_and_stderr
@@ -333,5 +363,7 @@ test_permanent_failures_do_not_retry
 test_ambiguous_timeout_does_not_retry
 test_retry_exhaustion_keeps_final_error
 test_invalid_retry_config_fails_before_curl
+test_claude_uses_webhook_and_default_keyword
+test_claude_requires_its_own_webhook
 
 echo "notification transport tests passed."
